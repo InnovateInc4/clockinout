@@ -1,0 +1,1 @@
+module.exports = "your_secret_key_here";
