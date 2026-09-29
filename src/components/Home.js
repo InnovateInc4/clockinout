@@ -109,21 +109,7 @@ const Home = () => {
                         >
                             GO TO WORKSTATION
                         </button>
-                        <button 
-                            style={{ 
-                                padding: '16px 32px',
-                                fontSize: '0.9rem',
-                                fontWeight: '800',
-                                background: 'transparent', 
-                                border: '2px solid rgba(255, 255, 255, 0.8)', 
-                                color: 'white',
-                                borderRadius: '12px',
-                                cursor: 'pointer',
-                                transition: 'all 0.2s ease'
-                            }}
-                        >
-                            LEARN MORE
-                        </button>
+                        
                     </div>
                 </div>
 

@@ -38,6 +38,28 @@ body { font-family: 'Inter', sans-serif; background-color: #f4f7f4; }
   cursor: pointer;
 }
 
+/* Neon Clock Styling */
+.neon-time {
+  font-family: "Inter", monospace; /* Or any digital/mono font you prefer */
+  font-size: 4rem;
+  font-weight: 800;
+  color: #86efac; /* Pale green text */
+  text-shadow: 
+    0 0 10px rgba(74, 222, 128, 0.4), 
+    0 0 20px rgba(74, 222, 128, 0.2), 
+    0 0 40px rgba(74, 222, 128, 0.1);
+  letter-spacing: 2px;
+  text-align: center;
+  margin: 20px 0;
+  line-height: 1;
+}
+
+/* Optional: If you want to style the AM/PM slightly smaller */
+.neon-time span {
+  font-size: 2rem;
+  margin-left: 10px;
+}
+
 .sign-out-btn-modern {
   background-color: #72f88f;
   color: #1a1a1a;

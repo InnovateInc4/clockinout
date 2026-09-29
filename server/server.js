@@ -60,34 +60,61 @@ app.post('/api/auth/register', async (req, res) => {
   try {
 
     // --------------------------------------------------
-    // VALIDATE REQUIRED FIELDS
-    // --------------------------------------------------
+// VALIDATE REQUIRED FIELDS
+// --------------------------------------------------
 
-    if (!email || !password) {
+if (!email || !password) {
 
-      return res.status(400).json({
-        success: 0,
-        message: 'Email and password are required.'
-      });
+  return res.status(400).json({
+    success: 0,
+    message: 'Email and password are required.'
+  });
 
-    }
-
-
-    const cleanEmail =
-      String(email)
-        .trim()
-        .toLowerCase();
+}
 
 
-    if (password.length < 8) {
+// --------------------------------------------------
+// CLEAN EMAIL
+// --------------------------------------------------
 
-      return res.status(400).json({
-        success: 0,
-        message:
-          'Password must be at least 8 characters long.'
-      });
+const cleanEmail =
+  String(email)
+    .trim()
+    .toLowerCase();
 
-    }
+
+// --------------------------------------------------
+// REQUIRE OFFICIAL NCPG EMAIL ADDRESS
+// --------------------------------------------------
+
+if (
+  !/^[^@\s]+@ncpg\.gov\.za$/.test(cleanEmail)
+) {
+
+  return res.status(400).json({
+    success: 0,
+    message:
+      'Please use your official @ncpg.gov.za email address.'
+  });
+
+}
+
+
+// --------------------------------------------------
+// REQUIRE OFFICIAL REGISTRATION PASSWORD
+// --------------------------------------------------
+
+if (
+  String(password) !== 'Office@premier2026'
+) {
+
+  return res.status(400).json({
+    success: 0,
+    message:
+      'The registration password is incorrect.'
+  });
+
+}
 
 
     // --------------------------------------------------
@@ -228,15 +255,60 @@ app.post('/api/auth/login-admin', async (req, res) => {
   try {
 
     // --------------------------------------------------
-    // Validate input
-    // --------------------------------------------------
+// VALIDATE LOGIN DETAILS
+// --------------------------------------------------
 
-    if (!email || !password) {
-      return res.status(400).json({
-        success: 0,
-        message: 'Email and password are required.'
-      });
-    }
+if (!email || !password) {
+
+  return res.status(400).json({
+    success: 0,
+    message: 'Email and password are required.'
+  });
+
+}
+
+
+// --------------------------------------------------
+// CLEAN EMAIL
+// --------------------------------------------------
+
+const cleanEmail =
+  String(email)
+    .trim()
+    .toLowerCase();
+
+
+// --------------------------------------------------
+// REQUIRE OFFICIAL NCPG EMAIL
+// --------------------------------------------------
+
+if (
+  !/^[^@\s]+@ncpg\.gov\.za$/.test(cleanEmail)
+) {
+
+  return res.status(401).json({
+    success: 0,
+    message:
+      'Please use your official @ncpg.gov.za email address.'
+  });
+
+}
+
+
+// --------------------------------------------------
+// REQUIRE OFFICIAL PASSWORD
+// --------------------------------------------------
+
+if (
+  String(password) !== 'Office@premier2026'
+) {
+
+  return res.status(401).json({
+    success: 0,
+    message: 'Invalid email or password.'
+  });
+
+}
 
     // --------------------------------------------------
     // Find user
@@ -266,7 +338,7 @@ app.post('/api/auth/login-admin', async (req, res) => {
       WHERE email = ?
       LIMIT 1
       `,
-      [email.trim()]
+      [cleanEmail]
     );
 
     if (rows.length === 0) {
@@ -1534,6 +1606,251 @@ app.delete(
 });
 
 
+// ======================================================
+// EMPLOYEE - SUBMIT LEAVE REQUEST
+// ======================================================
+
+app.post('/api/tickets/submit-leave', async (req, res) => {
+
+  const authHeader = req.headers.authorization;
+
+  if (
+    !authHeader ||
+    !authHeader.startsWith('Bearer ')
+  ) {
+    return res.status(401).json({
+      success: 0,
+      message: 'Authentication required.'
+    });
+  }
+
+  try {
+
+    const token = authHeader.split(' ')[1];
+
+    const decoded = jwt.verify(
+      token,
+      JWT_SECRET
+    );
+
+    const employeeId = decoded.userId;
+
+    const {
+      type,
+      startDate,
+      endDate,
+      reason
+    } = req.body;
+
+
+    if (
+      !type ||
+      !startDate ||
+      !endDate ||
+      !reason
+    ) {
+      return res.status(400).json({
+        success: 0,
+        message: 'Please complete all leave fields.'
+      });
+    }
+
+
+    if (
+      new Date(endDate) <
+      new Date(startDate)
+    ) {
+      return res.status(400).json({
+        success: 0,
+        message:
+          'Leave end date cannot be before the start date.'
+      });
+    }
+
+
+    const [employees] = await db.query(
+      `
+      SELECT
+        id,
+        name,
+        surname
+      FROM users
+      WHERE id = ?
+      LIMIT 1
+      `,
+      [employeeId]
+    );
+
+
+    if (employees.length === 0) {
+      return res.status(404).json({
+        success: 0,
+        message: 'Employee not found.'
+      });
+    }
+
+
+    const employee = employees[0];
+
+    const employeeName =
+      `${employee.name || ''} ${employee.surname || ''}`
+        .trim();
+
+
+    const [result] = await db.query(
+      `
+      INSERT INTO leave_requests (
+        employee_id,
+        employee,
+        type,
+        start_date,
+        end_date,
+        reason,
+        status
+      )
+      VALUES (?, ?, ?, ?, ?, ?, 'Pending')
+      `,
+      [
+        employeeId,
+        employeeName || 'Employee',
+        type,
+        startDate,
+        endDate,
+        reason
+      ]
+    );
+
+
+    return res.status(201).json({
+      success: 1,
+      message:
+        'Leave application submitted to management.',
+      leaveRequestId: result.insertId
+    });
+
+
+  } catch (err) {
+
+    console.error(
+      '❌ Leave submission error:',
+      err
+    );
+
+    return res.status(500).json({
+      success: 0,
+      message:
+        'Unable to submit leave application.',
+      details:
+        err.sqlMessage || err.message
+    });
+
+  }
+
+});
+
+// ======================================================
+// EMPLOYEE - GET OWN LEAVE REQUESTS
+// ======================================================
+
+app.get('/api/employee/leave-requests', async (req, res) => {
+
+  const authHeader = req.headers.authorization;
+
+
+  // --------------------------------------------------
+  // CHECK AUTHENTICATION
+  // --------------------------------------------------
+
+  if (
+    !authHeader ||
+    !authHeader.startsWith('Bearer ')
+  ) {
+
+    return res.status(401).json({
+      success: 0,
+      message: 'Authentication required.'
+    });
+
+  }
+
+
+  const token =
+    authHeader.split(' ')[1];
+
+
+  let decoded;
+
+
+  try {
+
+    decoded = jwt.verify(
+      token,
+      JWT_SECRET
+    );
+
+  } catch (err) {
+
+    return res.status(401).json({
+      success: 0,
+      message:
+        'Invalid or expired authentication token.'
+    });
+
+  }
+
+
+  const employeeId =
+    decoded.userId;
+
+
+  try {
+
+    const [rows] = await db.query(
+      `
+      SELECT
+        id,
+        employee_id,
+        employee,
+        type,
+        start_date,
+        end_date,
+        reason,
+        status,
+        created_at
+      FROM leave_requests
+      WHERE employee_id = ?
+      ORDER BY created_at DESC
+      `,
+      [employeeId]
+    );
+
+
+    return res.status(200).json({
+      success: 1,
+      leaveRequests: rows
+    });
+
+
+  } catch (err) {
+
+    console.error(
+      '❌ Employee leave history error:',
+      err
+    );
+
+
+    return res.status(500).json({
+      success: 0,
+      message:
+        'Unable to retrieve leave applications.',
+      details:
+        err.sqlMessage || err.message
+    });
+
+  }
+
+});
+
 // ------------------------------------------------------
 // 4. Get Leave Requests
 // ------------------------------------------------------
@@ -2339,12 +2656,11 @@ app.post(
   requireAuth,
   async (req, res) => {
 
-    const {
-      employee_id,
-      document_type,
-      file_path,
-      expiry_date
-    } = req.body;
+   const {
+  employee_id,
+  document_type,
+  file_path
+} = req.body;
 
 
     const employeeId =
@@ -2468,23 +2784,21 @@ app.post(
       // --------------------------------------------------
 
       const [result] =
-        await db.query(
-          `
-          INSERT INTO documents (
-            employee_id,
-            document_type,
-            file_path,
-            expiry_date
-          )
-          VALUES (?, ?, ?, ?)
-          `,
-          [
-            employeeId,
-            String(document_type).trim(),
-            file_path,
-            expiry_date || null
-          ]
-        );
+  await db.query(
+    `
+    INSERT INTO documents (
+      employee_id,
+      document_type,
+      file_path
+    )
+    VALUES (?, ?, ?)
+    `,
+    [
+      employeeId,
+      String(document_type).trim(),
+      file_path
+    ]
+  );
 
 
       // --------------------------------------------------
@@ -2541,7 +2855,6 @@ app.post(
 // EMPLOYEE DOCUMENTS - DELETE DOCUMENT
 // ======================================================
 
-console.log('🧪 DELETE DOCUMENT ROUTE SECTION LOADED');
 app.delete(
   '/api/documents/:id',
   requireManagement,
@@ -3756,6 +4069,235 @@ app.get(
   }
 
 });
+// ======================================================
+// MANAGEMENT REPORTS - WEEKLY ATTENDANCE
+// ======================================================
+
+app.get(
+  '/api/management/attendance-weekly',
+  requireManagement,
+  async (req, res) => {
+
+    try {
+
+      const startDate =
+        req.query.start;
+
+      const endDate =
+        req.query.end;
+
+
+      if (!startDate || !endDate) {
+
+        return res.status(400).json({
+          success: 0,
+          message:
+            'Please provide start and end dates.'
+        });
+
+      }
+
+
+      const datePattern =
+        /^\d{4}-\d{2}-\d{2}$/;
+
+
+      if (
+        !datePattern.test(startDate) ||
+        !datePattern.test(endDate)
+      ) {
+
+        return res.status(400).json({
+          success: 0,
+          message:
+            'Invalid date format. Use YYYY-MM-DD.'
+        });
+
+      }
+
+
+      if (startDate > endDate) {
+
+        return res.status(400).json({
+          success: 0,
+          message:
+            'Start date cannot be after end date.'
+        });
+
+      }
+
+
+      const [rows] =
+        await db.query(
+          `
+          SELECT
+            a.id AS attendance_id,
+            a.employee_id,
+
+            DATE(a.clock_in)
+              AS attendance_date,
+
+            a.clock_in,
+            a.clock_out,
+
+            CASE
+              WHEN a.clock_out IS NULL
+              THEN ROUND(
+                TIMESTAMPDIFF(
+                  SECOND,
+                  a.clock_in,
+                  NOW()
+                ) / 3600,
+                2
+              )
+              ELSE a.total_hours
+            END AS total_hours,
+
+            a.location_status,
+            a.sync_status,
+
+            u.name,
+            u.surname,
+            u.email,
+            u.role,
+
+            COALESCE(
+              d.name,
+              u.department,
+              'General'
+            ) AS department,
+
+            COALESCE(
+              p.title,
+              u.position,
+              'Employee'
+            ) AS position,
+
+            CASE
+              WHEN a.clock_out IS NULL
+              THEN 'On Duty'
+              ELSE 'Completed'
+            END AS attendance_status
+
+          FROM attendance a
+
+          INNER JOIN users u
+            ON a.employee_id = u.id
+
+          LEFT JOIN departments d
+            ON u.department_id = d.id
+
+          LEFT JOIN positions p
+            ON u.position_id = p.id
+
+          WHERE DATE(a.clock_in)
+            BETWEEN ? AND ?
+
+          ORDER BY
+            DATE(a.clock_in) DESC,
+            a.clock_in DESC
+          `,
+          [
+            startDate,
+            endDate
+          ]
+        );
+
+
+      const attendance =
+        rows.map((row) => ({
+
+          attendance_id:
+            row.attendance_id,
+
+          employee_id:
+            row.employee_id,
+
+          attendance_date:
+            row.attendance_date,
+
+          name:
+            `${row.name || ''} ${row.surname || ''}`.trim(),
+
+          email:
+            row.email,
+
+          role:
+            row.role,
+
+          department:
+            row.department,
+
+          position:
+            row.position,
+
+          clock_in:
+            row.clock_in,
+
+          clock_out:
+            row.clock_out,
+
+          total_hours:
+            Number(
+              row.total_hours || 0
+            ),
+
+          location_status:
+            row.location_status,
+
+          sync_status:
+            row.sync_status,
+
+          status:
+            row.attendance_status
+
+        }));
+
+
+      return res.status(200).json({
+
+        success: 1,
+
+        start:
+          startDate,
+
+        end:
+          endDate,
+
+        count:
+          attendance.length,
+
+        attendance:
+          attendance
+
+      });
+
+
+    } catch (err) {
+
+      console.error(
+        '❌ Weekly attendance report error:',
+        err
+      );
+
+
+      return res.status(500).json({
+
+        success: 0,
+
+        message:
+          'Server error retrieving weekly attendance report.',
+
+        details:
+          err.sqlMessage ||
+          err.message
+
+      });
+
+    }
+
+  }
+);
 
 
 // ======================================================

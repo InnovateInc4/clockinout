@@ -1,8 +1,56 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 const Navbar = ({ userName, isClockedIn, isManagerAuth, handleSignOut }) => {
   const navigate = useNavigate();
+
+  const [searchQuery, setSearchQuery] = useState('');
+
+const handleSearch = (e) => {
+  if (e.key !== 'Enter') return;
+
+  const query = searchQuery.trim().toLowerCase();
+
+  if (!query) return;
+
+  if (
+    query.includes('vacancy') ||
+    query.includes('vacancies') ||
+    query.includes('job') ||
+    query.includes('career')
+  ) {
+    navigate('/vacancies');
+  } else if (
+    query.includes('notice') ||
+    query.includes('announcement')
+  ) {
+    navigate('/notices');
+  } else if (
+    query.includes('meeting') ||
+    query.includes('forum')
+  ) {
+    navigate('/meetings');
+  } else if (
+    query.includes('employee') ||
+    query.includes('staff') ||
+    query.includes('attendance') ||
+    query.includes('leave') ||
+    query.includes('report') ||
+    query.includes('audit') ||
+    query.includes('management')
+  ) {
+    navigate('/management');
+  } else if (
+    query.includes('home') ||
+    query.includes('dashboard')
+  ) {
+    navigate('/');
+  } else {
+    alert('No matching section found.');
+  }
+
+  setSearchQuery('');
+};
 
   return (
     <nav style={{
@@ -26,27 +74,33 @@ const Navbar = ({ userName, isClockedIn, isManagerAuth, handleSignOut }) => {
         style={{ flex: '1', display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer' }} 
         onClick={() => navigate('/')}
       >
-        <div style={{ 
-          backgroundColor: '#ea580c', 
-          width: '36px', 
-          height: '36px', 
-          borderRadius: '8px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: '#ffffff',
-          fontWeight: '900',
-          fontSize: '1.2rem',
-          boxShadow: '0 2px 10px rgba(234, 88, 12, 0.3)'
-        }}>
-          NC
-        </div>
+        <div
+  style={{
+    width: '46px',
+    height: '46px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0
+  }}
+>
+  <img
+    src="https://www.loeser.us/flags/images/south_africa/provincial/northern_cape_arms.jpg"
+    alt="Northern Cape Provincial Coat of Arms"
+    style={{
+      width: '46px',
+      height: '46px',
+      objectFit: 'contain',
+      borderRadius: '6px'
+    }}
+  />
+</div>
         <div style={{ lineHeight: '1.1' }}>
           <h2 style={{ margin: 0, fontSize: '1.1rem', fontWeight: '900', letterSpacing: '0.5px', color: '#0f172a' }}>
-            PREMIER'S PORTAL
+            OFFICE OF THE PREMIER
           </h2>
           <div style={{ fontSize: '0.65rem', color: '#ea580c', fontWeight: '800', marginTop: '2px', textTransform: 'uppercase' }}>
-            Northern Cape Govt.
+            Northern Cape Provincial Government
           </div>
         </div>
       </div>
@@ -69,6 +123,9 @@ const Navbar = ({ userName, isClockedIn, isManagerAuth, handleSignOut }) => {
           <input 
             type="text" 
             placeholder="Search..." 
+            value={searchQuery}
+onChange={(e) => setSearchQuery(e.target.value)}
+onKeyDown={handleSearch}
             style={{
               background: 'rgba(255, 255, 255, 0.5)',
               border: '1px solid rgba(255, 255, 255, 0.9)',
