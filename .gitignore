@@ -18,6 +18,9 @@
 .env.test.local
 .env.production.local
 
+# Phase 4 local safety backups
+*.phase4_backup
+
 # misc
 .DS_Store
 
