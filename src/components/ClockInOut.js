@@ -54,6 +54,17 @@ const [
     const videoRef = useRef(null);
     const mediaStreamRef = useRef(null);
     const faceModelsReadyRef = useRef(false);
+    // ======================================================
+// GEOFENCE EXIT MONITORING
+// ======================================================
+
+// Number of consecutive checks outside the authorised zone
+const outsideGeofenceChecksRef =
+    useRef(0);
+
+// Prevent more than one automatic clock-out request
+const autoClockOutRunningRef =
+    useRef(false);
     useEffect(() => {
 
     const loadFaceModels = async () => {
@@ -87,77 +98,82 @@ const [
 
 }, []);
 
-const targetLoc = {
-    lat: -28.74759,
-    lng: 24.76484
-};
 // ======================================================
-// TEMPORARY DEVELOPMENT MODE
-// Set this back to false when testing is finished
+// SERVER-VERIFIED 50 METRE GEOFENCE
 // ======================================================
-const DEV_LOCATION_BYPASS = true;
-    useEffect(() => {
-        const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-        return () => clearInterval(timer);
-    }, []);
+// ======================================================
+// AUTO CLOCK-OUT AFTER LEAVING GEOFENCE
+// ======================================================
 
-    const verifyLocation = () => {
+const autoClockOutAfterGeofenceExit =
+    async (latitude, longitude) => {
 
-        if (DEV_LOCATION_BYPASS) {
+        // Prevent duplicate requests
+        if (autoClockOutRunningRef.current) {
+            return;
+        }
 
-    setIsInZone(true);
+        autoClockOutRunningRef.current = true;
 
-    setUserCoords({
-        lat: targetLoc.lat,
-        lng: targetLoc.lng
-    });
+        try {
 
-    setLocationStatus(
-        "TEST MODE — Geofence Bypassed ✅"
-    );
+            const response =
+                await axios.put(
 
-    return;
-}
-    // Maximum allowed distance from the workplace
-    const GEOFENCE_RADIUS_METERS = 50;
+                    "/api/attendance/auto-clock-out-geofence",
 
-    // --------------------------------------------------
-    // Calculate distance between two GPS coordinates
-    // using the Haversine formula
-    // --------------------------------------------------
-    const calculateDistance = (lat1, lon1, lat2, lon2) => {
+                    {
+                        latitude,
+                        longitude
+                    },
 
-        const earthRadius = 6371000; // metres
+                    props.config
 
-        const toRadians = (degrees) => {
-            return degrees * (Math.PI / 180);
-        };
+                );
 
-        const dLat = toRadians(lat2 - lat1);
-        const dLon = toRadians(lon2 - lon1);
 
-        const a =
-            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-            Math.cos(toRadians(lat1)) *
-            Math.cos(toRadians(lat2)) *
-            Math.sin(dLon / 2) *
-            Math.sin(dLon / 2);
+            if (response.data.success) {
 
-        const c = 2 * Math.atan2(
-            Math.sqrt(a),
-            Math.sqrt(1 - a)
-        );
+                setClockedIn(false);
 
-        return earthRadius * c;
+                outsideGeofenceChecksRef.current = 0;
+
+                props.showAlert(
+                    "You left the authorised work area. Your shift was automatically clocked out.",
+                    "warning"
+                );
+
+                console.log(
+                    "⚠️ Automatic geofence clock-out successful."
+                );
+
+            }
+
+        } catch (error) {
+
+            console.error(
+                "❌ Automatic geofence clock-out failed:",
+                error.response?.data ||
+                error.message
+            );
+
+        } finally {
+
+            autoClockOutRunningRef.current = false;
+
+        }
+
     };
-
+const verifyLocation = () => {
 
     // --------------------------------------------------
-    // Browser does not support GPS
+    // CHECK BROWSER GPS SUPPORT
     // --------------------------------------------------
+
     if (!navigator.geolocation) {
 
         setIsInZone(false);
+
         setUserCoords(null);
 
         setLocationStatus(
@@ -168,15 +184,18 @@ const DEV_LOCATION_BYPASS = true;
     }
 
 
-    setLocationStatus("Checking location...");
+    setLocationStatus(
+        "Checking location..."
+    );
 
 
     // --------------------------------------------------
-    // Get employee GPS position
+    // GET REAL DEVICE LOCATION
     // --------------------------------------------------
+
     navigator.geolocation.getCurrentPosition(
 
-        (position) => {
+        async (position) => {
 
             const {
                 latitude,
@@ -184,53 +203,160 @@ const DEV_LOCATION_BYPASS = true;
                 accuracy
             } = position.coords;
 
+
+            console.log(
+                `📍 Current latitude: ${latitude}`
+            );
+
+            console.log(
+                `📍 Current longitude: ${longitude}`
+            );
+
+            console.log(
+                `📡 GPS accuracy: ${accuracy.toFixed(1)}m`
+            );
+
+
+            // Save REAL GPS coordinates
             setUserCoords({
+
                 lat: latitude,
+
                 lng: longitude
+
             });
 
 
-            // --------------------------------------------------
-            // Calculate distance from target workplace
-            // --------------------------------------------------
-            const distance = calculateDistance(
+            try {
+
+                // ------------------------------------------
+                // ASK BACKEND TO VERIFY LOCATION
+                // ------------------------------------------
+
+                const response =
+                    await axios.post(
+
+                        "/api/attendance/check-location",
+
+                        {
+                            latitude:
+                                latitude,
+
+                            longitude:
+                                longitude
+                        },
+
+                        props.config
+
+                    );
+
+
+                const result =
+                    response.data;
+
+
+                // ------------------------------------------
+                // INSIDE AUTHORISED ZONE
+                // ------------------------------------------
+
+                if (
+    result.success &&
+    result.inZone
+) {
+
+    // Employee is safely inside again,
+    // so reset the outside-zone counter.
+    outsideGeofenceChecksRef.current = 0;
+
+    setIsInZone(true);
+
+    setLocationStatus(
+
+        `${result.locationName} ✅ ` +
+        `(${result.distance}m)`
+
+    );
+
+}
+
+                // ------------------------------------------
+                // OUTSIDE AUTHORISED ZONE
+                // ------------------------------------------
+
+   else {
+
+    setIsInZone(false);
+
+    setLocationStatus(
+
+        `Outside Allowed Zone ❌ ` +
+        `(${result.distance}m from nearest location)`
+
+    );
+
+
+    // --------------------------------------------------
+    // COUNT CONSECUTIVE OUTSIDE CHECKS
+    // --------------------------------------------------
+
+    if (clockedIn) {
+
+        outsideGeofenceChecksRef.current += 1;
+
+
+        console.log(
+            `⚠️ Outside geofence check ` +
+            `${outsideGeofenceChecksRef.current}/3`
+        );
+
+
+        // ----------------------------------------------
+        // AUTO CLOCK-OUT AFTER 3 FAILED CHECKS
+        // ----------------------------------------------
+
+        if (
+            outsideGeofenceChecksRef.current >= 3
+        ) {
+
+            console.log(
+                "⚠️ Employee has remained outside " +
+                "the authorised geofence."
+            );
+
+
+            await autoClockOutAfterGeofenceExit(
                 latitude,
-                longitude,
-                targetLoc.lat,
-                targetLoc.lng
+                longitude
             );
 
-            console.log(
-                `📍 Distance from workplace: ${distance.toFixed(2)} metres`
-            );
+        }
 
-            console.log(
-                `📡 GPS accuracy: ${accuracy.toFixed(2)} metres`
-            );
+    } else {
+
+        outsideGeofenceChecksRef.current = 0;
+
+    }
+
+}
 
 
-            // --------------------------------------------------
-            // Employee is inside the 50 metre geofence
-            // --------------------------------------------------
-            if (distance <= GEOFENCE_RADIUS_METERS) {
+            } catch (error) {
 
-                setIsInZone(true);
-
-                setLocationStatus(
-                    `Sol Plaatje University Zone ✅ (${distance.toFixed(1)}m)`
+                console.error(
+                    "❌ Geofence verification error:",
+                    error.response?.data ||
+                    error.message
                 );
 
-            }
-
-            // --------------------------------------------------
-            // Employee is outside the geofence
-            // --------------------------------------------------
-            else {
 
                 setIsInZone(false);
 
+
                 setLocationStatus(
-                    `Outside Allowed Zone ❌ (${distance.toFixed(1)}m away)`
+
+                    error.response?.data?.message ||
+                    "Unable to verify work location ❌"
+
                 );
 
             }
@@ -239,8 +365,9 @@ const DEV_LOCATION_BYPASS = true;
 
 
         // --------------------------------------------------
-        // GPS error
+        // GPS ERROR
         // --------------------------------------------------
+
         (error) => {
 
             console.error(
@@ -248,8 +375,11 @@ const DEV_LOCATION_BYPASS = true;
                 error.message
             );
 
+
             setIsInZone(false);
+
             setUserCoords(null);
+
 
             setLocationStatus(
                 "Unable to verify location ❌"
@@ -259,15 +389,19 @@ const DEV_LOCATION_BYPASS = true;
 
 
         // --------------------------------------------------
-        // GPS options
+        // HIGH ACCURACY GPS
         // --------------------------------------------------
-        {
-            enableHighAccuracy: true,
-            timeout: 10000,
-            maximumAge: 0
-        }
+
+      {
+    enableHighAccuracy: true,
+
+    timeout: 30000,
+
+    maximumAge: 0
+}
 
     );
+
 };
 
     const selectedTicketRef = useRef("default");
@@ -624,7 +758,7 @@ useEffect(() => {
     if (!isInZone) {
 
         props.showAlert(
-            `Clocking blocked: ${locationStatus || "You are outside the permitted 20 metre work zone."}`,
+            `Clocking blocked: ${locationStatus || "You are outside the permitted 50 metre work zone."}`,
             "danger"
         );
 
@@ -1149,6 +1283,64 @@ setTaskDescription("");
     }
 }, [loaded, props.userEmail, props.getTickets]);
 
+// ======================================================
+// MONITOR GEOFENCE WHILE EMPLOYEE IS CLOCKED IN
+// ======================================================
+
+useEffect(() => {
+
+    // If employee is not clocked in,
+    // no location monitoring is needed.
+    if (!clockedIn) {
+
+        outsideGeofenceChecksRef.current = 0;
+        autoClockOutRunningRef.current = false;
+
+        return;
+    }
+
+
+    console.log(
+        "📍 Geofence monitoring started."
+    );
+
+
+    // Check immediately
+    verifyLocation();
+
+
+    // Then check every 60 seconds
+    const geofenceMonitor =
+        setInterval(() => {
+
+            console.log(
+                "📍 Running automatic geofence check..."
+            );
+
+            verifyLocation();
+
+        }, 60 * 1000);
+
+
+    // Stop monitoring when employee clocks out
+    // or leaves this page.
+    return () => {
+
+        clearInterval(
+            geofenceMonitor
+        );
+
+        console.log(
+            "📍 Geofence monitoring stopped."
+        );
+
+    };
+
+// We intentionally only restart monitoring
+// when clockedIn changes.
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}, [clockedIn]);
+
     return (
         <div style={{
             backgroundImage: `url('https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=1920&q=80')`,
@@ -1321,6 +1513,7 @@ setTaskDescription("");
             )}
 
           <div style={{ maxWidth: '960px', margin: '0 auto', position: 'relative', zIndex: 1 }}>
+
 
     {/* ======================================================
         EMPLOYEE PERSONNEL FILE

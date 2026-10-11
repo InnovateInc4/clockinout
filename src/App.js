@@ -716,52 +716,62 @@ const config = {
 
 
     // ==================================================
-    // ADMIN / MANAGER
-    // ==================================================
+// MANAGEMENT ROLES
+// ==================================================
 
-    if (
-      normalizedRole === 'admin' ||
-      normalizedRole === 'manager'
-    ) {
-
-      setIsManagerAuth(
-        true
-      );
-
-
-      sessionStorage.setItem(
-        'isManager',
-        'true'
-      );
+const managementRoles = [
+  'supervisor',
+  'hr_admin',
+  'finance',
+  'admin',
+  'manager'
+];
 
 
-      navigate(
-        '/management'
-      );
+if (
+  managementRoles.includes(
+    normalizedRole
+  )
+) {
 
-    }
-
-    // ==================================================
-    // EMPLOYEE
-    // ==================================================
-
-    else {
-
-      setIsManagerAuth(
-        false
-      );
+  setIsManagerAuth(
+    true
+  );
 
 
-      sessionStorage.removeItem(
-        'isManager'
-      );
+  sessionStorage.setItem(
+    'isManager',
+    'true'
+  );
 
 
-      navigate(
-        '/clock-in'
-      );
+  navigate(
+    '/management'
+  );
 
-    }
+}
+
+else {
+
+  // ==================================================
+  // WORKER / EMPLOYEE
+  // ==================================================
+
+  setIsManagerAuth(
+    false
+  );
+
+
+  sessionStorage.removeItem(
+    'isManager'
+  );
+
+
+  navigate(
+    '/clock-in'
+  );
+
+}
 
   };
 
@@ -1243,55 +1253,36 @@ const config = {
         {/* MANAGEMENT DASHBOARD */}
         {/* ================================================= */}
 
-        <Route
-          path="/management"
-          element={
-
-            isManagerAuth &&
-            (
-              userRole.toLowerCase() ===
-                'admin' ||
-
-              userRole.toLowerCase() ===
-                'manager'
-            )
-
-              ? (
-
-                  <ManagementView
-                    config={
-                      config
-                    }
-                  />
-
-                )
-
-              : (
-
-                  userName
-
-                    ? (
-
-                        <Navigate
-                          to="/clock-in"
-                          replace
-                        />
-
-                      )
-
-                    : (
-
-                        <Navigate
-                          to="/login-admin"
-                          replace
-                        />
-
-                      )
-
-                )
-
-          }
-        />
+          <Route
+  path="/management"
+  element={
+    isManagerAuth &&
+    [
+      'supervisor',
+      'hr_admin',
+      'finance',
+      'admin',
+      'manager'
+    ].includes(
+      String(userRole || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '_')
+    )
+      ? (
+          <ManagementView
+            config={config}
+            userRole={userRole}
+          />
+        )
+      : (
+          <Navigate
+            to="/clock-in"
+            replace
+          />
+        )
+  }
+/>
 
 
         {/* ================================================= */}

@@ -730,38 +730,152 @@ if (
 // MANAGEMENT AUTHORIZATION MIDDLEWARE
 // ======================================================
 
-const requireManagement = async (req, res, next) => {
+// ======================================================
+// ROLE-BASED AUTHORIZATION
+// ======================================================
 
-  return requireAuth(req, res, () => {
+// ------------------------------------------------------
+// NORMALISE SYSTEM ROLE
+// ------------------------------------------------------
 
-    const role =
-      (
-        req.user.role ||
-        ''
-      ).toLowerCase();
+const normalizeSystemRole = (role) => {
 
-
-    // Only current Admin or Manager accounts
-    // are allowed into management routes.
-    if (
-      role !== 'admin' &&
-      role !== 'manager'
-    ) {
-
-      return res.status(403).json({
-        success: 0,
-        message:
-          'Management access required.'
-      });
-
-    }
+  const normalized =
+    String(role || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '_');
 
 
-    next();
+  // Old employee accounts are treated as Workers.
+  if (normalized === 'employee') {
+    return 'worker';
+  }
 
-  });
+
+  // Accept a few HR spelling variations.
+  if (
+    normalized === 'hr' ||
+    normalized === 'hradmin' ||
+    normalized === 'hr_admin'
+  ) {
+    return 'hr_admin';
+  }
+
+
+  return normalized;
 
 };
+
+
+// ======================================================
+// GENERIC ROLE AUTHORIZATION
+// ======================================================
+
+const requireRoles =
+  (...allowedRoles) => {
+
+    const normalizedAllowedRoles =
+      allowedRoles.map(
+        normalizeSystemRole
+      );
+
+
+    return (req, res, next) => {
+
+      return requireAuth(
+        req,
+        res,
+        () => {
+
+          const role =
+            normalizeSystemRole(
+              req.user.role
+            );
+
+
+          if (
+            !normalizedAllowedRoles.includes(
+              role
+            )
+          ) {
+
+            return res.status(403).json({
+
+              success: 0,
+
+              message:
+                'You do not have permission to perform this action.'
+
+            });
+
+          }
+
+
+          // Store canonical role for later routes.
+          req.user.role = role;
+
+
+          next();
+
+        }
+      );
+
+    };
+
+};
+
+
+// ======================================================
+// LEGACY FULL MANAGEMENT ACCESS
+// ======================================================
+// Keep the existing Admin/Manager behaviour working
+// while we migrate each route to the new role model.
+// ======================================================
+
+const requireManagement =
+  requireRoles(
+    'admin',
+    'manager'
+  );
+
+
+// ======================================================
+// SUPERVISOR ACCESS
+// ======================================================
+
+const requireSupervisorAccess =
+  requireRoles(
+    'supervisor',
+    'hr_admin',
+    'admin',
+    'manager'
+  );
+
+
+// ======================================================
+// HR ACCESS
+// ======================================================
+
+const requireHRAccess =
+  requireRoles(
+    'hr_admin',
+    'admin',
+    'manager'
+  );
+
+
+// ======================================================
+// FINANCE ACCESS
+// ======================================================
+
+const requireFinanceAccess =
+  requireRoles(
+    'finance',
+    'hr_admin',
+    'admin',
+    'manager'
+  );
 
 
 // ======================================================
@@ -820,7 +934,7 @@ const writeAuditLog = async (
 
 app.get(
   '/api/management/live-staff',
-  requireManagement,
+  requireSupervisorAccess,
   async (req, res) => {
   try {
 
@@ -964,7 +1078,7 @@ app.get(
 
 app.get(
   '/api/management/today-overview',
-  requireManagement,
+  requireSupervisorAccess,
   async (req, res) => {
 
     try {
@@ -1106,7 +1220,7 @@ app.get(
 
 app.get(
   '/api/management/employees',
-  requireManagement,
+  requireHRAccess,
   async (req, res) => {
 
     try {
@@ -1261,7 +1375,7 @@ app.get(
 
 app.get(
   '/api/management/audit-logs',
-  requireManagement,
+  requireHRAccess,
   async (req, res) => {
 
     try {
@@ -1375,7 +1489,7 @@ app.get(
 
 app.put(
   '/api/management/employees/:id',
-  requireManagement,
+  requireHRAccess,
   async (req, res) => {
 
     
@@ -1384,11 +1498,12 @@ app.put(
       req.params.id;
 
     const {
-      department,
-      position,
-      employment_status,
-      account_status
-    } = req.body;
+  department,
+  position,
+  role,
+  employment_status,
+  account_status
+} = req.body;
 
 
     try {
@@ -1419,6 +1534,48 @@ app.put(
         });
 
       }
+      // --------------------------------------------------
+// VALIDATE / NORMALISE ROLE
+// --------------------------------------------------
+
+const currentRole =
+  normalizeSystemRole(
+    employeeRows[0].role
+  );
+
+
+const requestedRole =
+  role
+    ? normalizeSystemRole(role)
+    : currentRole;
+
+
+const validRoles = [
+  'worker',
+  'supervisor',
+  'hr_admin',
+  'finance',
+
+  // Legacy management roles retained
+  // so existing accounts are not broken.
+  'admin',
+  'manager'
+];
+
+
+if (
+  !validRoles.includes(
+    requestedRole
+  )
+) {
+
+  return res.status(400).json({
+    success: 0,
+    message:
+      'Invalid employee role.'
+  });
+
+}
 
 
       // --------------------------------------------------
@@ -1483,20 +1640,27 @@ app.put(
       await db.query(
         `
         UPDATE users
-        SET
-          department = ?,
-          position = ?,
-          employment_status = ?,
-          account_status = ?
-        WHERE id = ?
+SET
+  department = ?,
+  position = ?,
+  role = ?,
+  employment_status = ?,
+  account_status = ?
+WHERE id = ?
         `,
         [
-          department || 'General',
-          position || 'Employee',
-          employment_status || 'Active',
-          account_status || 'Active',
-          employeeId
-        ]
+  department || 'General',
+
+  position || 'Employee',
+
+  requestedRole,
+
+  employment_status || 'Active',
+
+  account_status || 'Active',
+
+  employeeId
+]
       );
 
 
@@ -1512,7 +1676,12 @@ app.put(
 await writeAuditLog(
   req.user.userId,
   'EMPLOYEE_UPDATED',
-  `Employee ID ${employeeId} updated. Department: ${department || 'General'}, Position: ${position || 'Employee'}, Employment Status: ${employment_status || 'Active'}, Account Status: ${account_status || 'Active'}`,
+  `Employee ID ${employeeId} updated. ` +
+`Department: ${department || 'General'}, ` +
+`Position: ${position || 'Employee'}, ` +
+`Role: ${requestedRole}, ` +
+`Employment Status: ${employment_status || 'Active'}, ` +
+`Account Status: ${account_status || 'Active'}`,
   req.ip
 );
 
@@ -1856,7 +2025,7 @@ app.get('/api/employee/leave-requests', async (req, res) => {
 // ------------------------------------------------------
 app.get(
   '/api/tickets/get-leave-requests',
-  requireManagement,
+  requireSupervisorAccess,
   async (req, res) => {
 
   try {
@@ -1889,7 +2058,7 @@ app.get(
 
 app.put(
   '/api/tickets/update-leave-status',
-  requireManagement,
+  requireSupervisorAccess,
   async (req, res) => {
 
     const { id, status } = req.body;
@@ -2983,21 +3152,158 @@ app.delete(
 
 
 // ======================================================
-// SOL PLAATJE UNIVERSITY CENTRAL CAMPUS GEOFENCE
+// AUTHORISED ATTENDANCE GEOFENCES
 // ======================================================
 
-const WORKPLACE_LOCATION = {
-  lat: -28.74759,
-  lng: 24.76484
-};
-
-const GEOFENCE_RADIUS_METERS = 20;
+// Required Phase 2/3 geofence radius
+const GEOFENCE_RADIUS_METERS = 50;
 
 
 // ------------------------------------------------------
-// Calculate distance between two GPS coordinates
-// using the Haversine formula
+// AUTHORISED WORK LOCATIONS
 // ------------------------------------------------------
+
+
+const AUTHORIZED_WORK_LOCATIONS = [
+
+  // ====================================================
+  // SPU CENTRAL CAMPUS - ZONE 1
+  // Current tested Central Campus point
+  // ====================================================
+  {
+    id: 'spu-central-zone-1',
+
+    name:
+      'Sol Plaatje University Central Campus',
+
+    lat:
+      -28.748350,
+
+    lng:
+      24.763800,
+
+    radiusMeters:
+      GEOFENCE_RADIUS_METERS
+  },
+
+
+  // ====================================================
+  // SPU CENTRAL CAMPUS - ZONE 2
+  // Moroka Hall C001 area
+  // ====================================================
+  {
+    id: 'spu-central-zone-2',
+
+    name:
+      'Sol Plaatje University Central Campus',
+
+    lat:
+      -28.748433,
+
+    lng:
+      24.764289,
+
+    radiusMeters:
+      GEOFENCE_RADIUS_METERS
+  },
+
+
+  // ====================================================
+  // SPU CENTRAL CAMPUS - ZONE 3
+  // Moroka Hall C002 area
+  // ====================================================
+  {
+    id: 'spu-central-zone-3',
+
+    name:
+      'Sol Plaatje University Central Campus',
+
+    lat:
+      -28.749019,
+
+    lng:
+      24.764469,
+
+    radiusMeters:
+      GEOFENCE_RADIUS_METERS
+  },
+
+
+  // ====================================================
+  // SPU CENTRAL CAMPUS - ZONE 4
+  // Library & Student Resource Centre area
+  // ====================================================
+  {
+    id: 'spu-central-zone-4',
+
+    name:
+      'Sol Plaatje University Central Campus',
+
+    lat:
+      -28.748950,
+
+    lng:
+      24.765020,
+
+    radiusMeters:
+      GEOFENCE_RADIUS_METERS
+  }
+
+];
+
+// ------------------------------------------------------
+// LOCATION 2: TEMPORARY DEVELOPMENT LOCATION
+//
+// The coordinates are stored in server/.env so that
+// private location information is NOT pushed to GitHub.
+// ------------------------------------------------------
+
+const developmentLatitude =
+  Number(
+    process.env.DEV_GEOFENCE_LAT
+  );
+
+const developmentLongitude =
+  Number(
+    process.env.DEV_GEOFENCE_LNG
+  );
+
+
+if (
+  Number.isFinite(
+    developmentLatitude
+  ) &&
+  Number.isFinite(
+    developmentLongitude
+  )
+) {
+
+  AUTHORIZED_WORK_LOCATIONS.push({
+
+    id:
+      'temporary-development-site',
+
+    name:
+      'Temporary Development Site',
+
+    lat:
+      developmentLatitude,
+
+    lng:
+      developmentLongitude,
+
+    radiusMeters:
+      GEOFENCE_RADIUS_METERS
+
+  });
+
+}
+
+
+// ======================================================
+// HAVERSINE DISTANCE CALCULATION
+// ======================================================
+
 const calculateDistanceMeters = (
   lat1,
   lon1,
@@ -3005,30 +3311,579 @@ const calculateDistanceMeters = (
   lon2
 ) => {
 
-  const earthRadius = 6371000;
+  const earthRadius =
+    6371000;
 
-  const toRadians = (degrees) => {
-    return degrees * (Math.PI / 180);
+  const toRadians = (
+    degrees
+  ) => {
+
+    return (
+      degrees *
+      (Math.PI / 180)
+    );
+
   };
 
-  const dLat = toRadians(lat2 - lat1);
-  const dLon = toRadians(lon2 - lon1);
+
+  const dLat =
+    toRadians(
+      lat2 - lat1
+    );
+
+  const dLon =
+    toRadians(
+      lon2 - lon1
+    );
+
 
   const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRadians(lat1)) *
-    Math.cos(toRadians(lat2)) *
-    Math.sin(dLon / 2) *
-    Math.sin(dLon / 2);
 
-  const c = 2 * Math.atan2(
-    Math.sqrt(a),
-    Math.sqrt(1 - a)
+    Math.sin(
+      dLat / 2
+    ) *
+    Math.sin(
+      dLat / 2
+    )
+
+    +
+
+    Math.cos(
+      toRadians(lat1)
+    ) *
+
+    Math.cos(
+      toRadians(lat2)
+    ) *
+
+    Math.sin(
+      dLon / 2
+    ) *
+
+    Math.sin(
+      dLon / 2
+    );
+
+
+  const c =
+    2 *
+    Math.atan2(
+      Math.sqrt(a),
+      Math.sqrt(1 - a)
+    );
+
+
+  return (
+    earthRadius * c
   );
 
-  return earthRadius * c;
 };
 
+
+// ======================================================
+// CHECK USER AGAINST ALL AUTHORISED LOCATIONS
+// ======================================================
+
+const evaluateGeofence = (
+  latitude,
+  longitude
+) => {
+
+  if (
+    AUTHORIZED_WORK_LOCATIONS.length === 0
+  ) {
+
+    return {
+      inZone: false,
+      locationName: null,
+      distance: null,
+      allowedRadius:
+        GEOFENCE_RADIUS_METERS
+    };
+
+  }
+
+
+  const locationResults =
+    AUTHORIZED_WORK_LOCATIONS.map(
+      (location) => {
+
+        const distance =
+          calculateDistanceMeters(
+
+            latitude,
+            longitude,
+
+            location.lat,
+            location.lng
+
+          );
+
+
+        return {
+
+          ...location,
+
+          distance
+
+        };
+
+      }
+    );
+
+
+  // Find the closest authorised workplace
+  locationResults.sort(
+    (a, b) =>
+      a.distance -
+      b.distance
+  );
+
+
+  const nearestLocation =
+    locationResults[0];
+
+
+  return {
+
+    inZone:
+
+      nearestLocation.distance <=
+      nearestLocation.radiusMeters,
+
+    locationName:
+      nearestLocation.name,
+
+    locationId:
+      nearestLocation.id,
+
+    distance:
+      nearestLocation.distance,
+
+    allowedRadius:
+      nearestLocation.radiusMeters
+
+  };
+};
+  // ======================================================
+// ATTENDANCE - CHECK CURRENT LOCATION
+// ======================================================
+
+app.post(
+  '/api/attendance/check-location',
+  requireAuth,
+  async (req, res) => {
+
+    const {
+      latitude,
+      longitude
+    } = req.body;
+
+
+    // --------------------------------------------------
+    // GPS LOCATION REQUIRED
+    // --------------------------------------------------
+
+    if (
+      latitude === null ||
+      latitude === undefined ||
+      longitude === null ||
+      longitude === undefined
+    ) {
+
+      return res.status(400).json({
+        success: 0,
+        message: 'GPS location is required.'
+      });
+
+    }
+
+
+    // --------------------------------------------------
+    // CONVERT GPS VALUES TO NUMBERS
+    // --------------------------------------------------
+
+    const employeeLatitude =
+      Number(latitude);
+
+    const employeeLongitude =
+      Number(longitude);
+
+
+    // --------------------------------------------------
+    // VALIDATE GPS VALUES
+    // --------------------------------------------------
+
+    if (
+      !Number.isFinite(employeeLatitude) ||
+      !Number.isFinite(employeeLongitude)
+    ) {
+
+      return res.status(400).json({
+        success: 0,
+        message: 'Invalid GPS coordinates.'
+      });
+
+    }
+
+
+    // --------------------------------------------------
+    // VALIDATE GPS RANGES
+    // --------------------------------------------------
+
+    if (
+      employeeLatitude < -90 ||
+      employeeLatitude > 90 ||
+      employeeLongitude < -180 ||
+      employeeLongitude > 180
+    ) {
+
+      return res.status(400).json({
+        success: 0,
+        message:
+          'GPS coordinates are outside valid ranges.'
+      });
+
+    }
+
+
+    // --------------------------------------------------
+    // CHECK AGAINST AUTHORISED GEOFENCES
+    // --------------------------------------------------
+
+    const geofence =
+      evaluateGeofence(
+        employeeLatitude,
+        employeeLongitude
+      );
+
+
+    console.log(
+      `📍 Location check for employee ${req.user.userId}: ` +
+      `${geofence.distance.toFixed(2)}m from ` +
+      `${geofence.locationName}`
+    );
+
+
+    // --------------------------------------------------
+    // RETURN LOCATION RESULT
+    // --------------------------------------------------
+
+    return res.status(200).json({
+
+      success: 1,
+
+      inZone:
+        geofence.inZone,
+
+      locationName:
+        geofence.locationName,
+
+      locationId:
+        geofence.locationId,
+
+      distance:
+        Number(
+          geofence.distance.toFixed(1)
+        ),
+
+      allowedRadius:
+        geofence.allowedRadius
+
+    });
+
+  }
+);
+// ======================================================
+// AUTO CLOCK-OUT - LEFT AUTHORISED GEOFENCE
+// ======================================================
+
+app.put(
+  '/api/attendance/auto-clock-out-geofence',
+  requireAuth,
+  async (req, res) => {
+
+    const employeeId =
+      Number(req.user.userId);
+
+
+    const {
+      latitude,
+      longitude
+    } = req.body;
+
+
+    // --------------------------------------------------
+    // VALIDATE EMPLOYEE
+    // --------------------------------------------------
+
+    if (
+      !Number.isInteger(employeeId) ||
+      employeeId <= 0
+    ) {
+
+      return res.status(401).json({
+        success: 0,
+        message: 'Invalid authenticated user.'
+      });
+
+    }
+
+
+    // --------------------------------------------------
+    // VALIDATE GPS
+    // --------------------------------------------------
+
+    const employeeLatitude =
+      Number(latitude);
+
+    const employeeLongitude =
+      Number(longitude);
+
+
+    if (
+      !Number.isFinite(employeeLatitude) ||
+      !Number.isFinite(employeeLongitude)
+    ) {
+
+      return res.status(400).json({
+        success: 0,
+        message:
+          'Valid GPS coordinates are required.'
+      });
+
+    }
+
+
+    // --------------------------------------------------
+    // CHECK AUTHORISED GEOFENCE
+    // --------------------------------------------------
+
+    const geofence =
+      evaluateGeofence(
+        employeeLatitude,
+        employeeLongitude
+      );
+
+
+    // This endpoint must NEVER auto clock-out
+    // somebody who is still inside an authorised zone.
+
+    if (geofence.inZone) {
+
+      return res.status(400).json({
+        success: 0,
+        message:
+          'Employee is still inside the authorised geofence.'
+      });
+
+    }
+
+
+    try {
+
+      // --------------------------------------------------
+      // FIND ACTIVE SHIFT
+      // --------------------------------------------------
+
+      const [activeShift] =
+        await db.query(
+          `
+          SELECT
+            id,
+            clock_in
+          FROM attendance
+          WHERE employee_id = ?
+            AND clock_in IS NOT NULL
+            AND clock_out IS NULL
+          ORDER BY clock_in DESC
+          LIMIT 1
+          `,
+          [employeeId]
+        );
+
+
+      if (
+        activeShift.length === 0
+      ) {
+
+        return res.status(400).json({
+          success: 0,
+          message:
+            'No active clock-in found.'
+        });
+
+      }
+
+
+      const attendanceId =
+        activeShift[0].id;
+
+
+      // --------------------------------------------------
+      // AUTO CLOCK-OUT
+      // --------------------------------------------------
+
+      await db.query(
+        `
+        UPDATE attendance
+        SET
+          clock_out = NOW(),
+
+          clock_out_latitude = ?,
+
+          clock_out_longitude = ?,
+
+          location_status =
+            'Outside Geofence',
+
+          sync_status =
+            'Auto Clock-Out - Left Geofence',
+
+          total_hours = ROUND(
+            TIMESTAMPDIFF(
+              SECOND,
+              clock_in,
+              NOW()
+            ) / 3600,
+            2
+          )
+
+        WHERE id = ?
+        `,
+        [
+          employeeLatitude,
+          employeeLongitude,
+          attendanceId
+        ]
+      );
+
+
+      console.log(
+        `⚠️ Employee ${employeeId} auto clocked out after leaving authorised geofence.`
+      );
+
+
+      // --------------------------------------------------
+      // AUDIT LOG
+      // --------------------------------------------------
+
+      await writeAuditLog(
+        employeeId,
+        'AUTO_CLOCK_OUT_GEOFENCE',
+        `Attendance ID ${attendanceId} automatically closed after employee left authorised geofence.`,
+        req.ip
+      );
+
+
+      return res.status(200).json({
+
+        success: 1,
+
+        message:
+          'Shift automatically closed after leaving the authorised geofence.',
+
+        attendanceId,
+
+        distance:
+          Number(
+            geofence.distance.toFixed(1)
+          )
+
+      });
+
+
+    } catch (err) {
+
+      console.error(
+        '❌ Auto geofence clock-out error:',
+        err
+      );
+
+
+      return res.status(500).json({
+
+        success: 0,
+
+        message:
+          'Server error during automatic geofence clock-out.',
+
+        details:
+          err.sqlMessage ||
+          err.message
+
+      });
+
+    }
+
+  }
+);
+
+// ======================================================
+// AUTOMATIC STALE SHIFT CLOSURE
+// ======================================================
+
+// Safety limit.
+// A shift that remains open longer than this
+// must be reviewed instead of continuing forever.
+const MAX_SHIFT_HOURS = 12;
+
+
+const closeStaleAttendanceShifts =
+  async () => {
+
+    try {
+
+      const [result] =
+        await db.query(
+          `
+          UPDATE attendance
+SET
+  clock_out =
+    DATE_ADD(
+      clock_in,
+      INTERVAL 12 HOUR
+    ),
+
+  total_hours = 0,
+
+  sync_status =
+    'Auto Closed - Review'
+
+          WHERE
+            clock_in IS NOT NULL
+
+            AND clock_out IS NULL
+
+            AND clock_in <=
+              DATE_SUB(
+                NOW(),
+                INTERVAL ${MAX_SHIFT_HOURS} HOUR
+              )
+          `
+        );
+
+
+      if (
+        result.affectedRows > 0
+      ) {
+
+        console.log(
+          `⚠️ Auto-closed ${result.affectedRows} stale attendance shift(s).`
+        );
+
+      }
+
+    } catch (err) {
+
+      console.error(
+        '❌ Stale shift auto-close error:',
+        err
+      );
+
+    }
+
+  };
 
 // ------------------------------------------------------
 // 1. CLOCK IN
@@ -3119,45 +3974,61 @@ app.post(
   }
 
 
+  
   // --------------------------------------------------
-  // Calculate distance from SPU Central Campus
-  // --------------------------------------------------
+// CHECK AUTHORISED 50 METRE GEOFENCE
+// --------------------------------------------------
 
-  const distanceFromWorkplace = calculateDistanceMeters(
+const geofence =
+  evaluateGeofence(
     employeeLatitude,
-    employeeLongitude,
-    WORKPLACE_LOCATION.lat,
-    WORKPLACE_LOCATION.lng
+    employeeLongitude
   );
 
+
+const distanceFromWorkplace =
+  geofence.distance;
+
+
+console.log(
+  `📍 Employee ${employee_id} is ` +
+  `${distanceFromWorkplace.toFixed(2)}m from ` +
+  `${geofence.locationName}.`
+);
+
+
+// --------------------------------------------------
+// REJECT IF OUTSIDE ALL AUTHORISED LOCATIONS
+// --------------------------------------------------
+
+if (!geofence.inZone) {
 
   console.log(
-    `📍 Employee ${employee_id} is ${distanceFromWorkplace.toFixed(2)}m from SPU Central Campus.`
+    `❌ Clock-out blocked for employee ${employee_id}. ` +
+    `Outside authorised geofence.`
   );
 
 
-  // --------------------------------------------------
-  // Reject if outside 20 metre geofence
-  // --------------------------------------------------
+  return res.status(403).json({
 
-  if (
-    distanceFromWorkplace > GEOFENCE_RADIUS_METERS
-  ) {
+    success: 0,
 
-    console.log(
-      `❌ Clock-in blocked for employee ${employee_id}. Outside geofence.`
-    );
+    message:
+      `Clock-out denied. You are ` +
+      `${distanceFromWorkplace.toFixed(1)} metres ` +
+      `from the nearest authorised workplace.`,
 
-    return res.status(403).json({
-      success: 0,
-      message: `Clock-in denied. You are ${distanceFromWorkplace.toFixed(1)} metres from the permitted clock-in point.`,
-      distance: Number(
+    distance:
+      Number(
         distanceFromWorkplace.toFixed(1)
       ),
-      allowedRadius: GEOFENCE_RADIUS_METERS
-    });
 
-  }
+    allowedRadius:
+      geofence.allowedRadius
+
+  });
+
+}
 
 
   try {
@@ -3220,7 +4091,7 @@ app.post(
     // --------------------------------------------------
 
     const verifiedLocationStatus =
-      `Sol Plaatje University Central Campus ✅ (${distanceFromWorkplace.toFixed(1)}m)`;
+  `${geofence.locationName} ✅ (${distanceFromWorkplace.toFixed(1)}m)`;
 
 
     const [result] = await db.query(
@@ -3387,47 +4258,89 @@ app.put(
 
 
   // --------------------------------------------------
-  // Calculate distance from SPU Central Campus
-  // --------------------------------------------------
+// CHECK AUTHORISED 50 METRE GEOFENCE
+// --------------------------------------------------
 
-  const distanceFromWorkplace = calculateDistanceMeters(
+const geofence =
+  evaluateGeofence(
     employeeLatitude,
-    employeeLongitude,
-    WORKPLACE_LOCATION.lat,
-    WORKPLACE_LOCATION.lng
+    employeeLongitude
   );
 
+
+const distanceFromWorkplace =
+  geofence.distance;
+
+
+console.log(
+  `📍 Employee ${employee_id} is ` +
+  `${distanceFromWorkplace.toFixed(2)}m from ` +
+  `${geofence.locationName}.`
+);
+
+
+// --------------------------------------------------
+// REJECT IF OUTSIDE ALL AUTHORISED LOCATIONS
+// --------------------------------------------------
+
+if (!geofence.inZone) {
 
   console.log(
-    `📍 Employee ${employee_id} is ${distanceFromWorkplace.toFixed(2)}m from SPU Central Campus during clock-out.`
+    `❌ Clock-in blocked for employee ${employee_id}. ` +
+    `Outside authorised geofence.`
   );
 
 
-  // --------------------------------------------------
-  // Reject Clock Out outside 20 metre zone
-  // --------------------------------------------------
+  return res.status(403).json({
 
-  if (
-    distanceFromWorkplace > GEOFENCE_RADIUS_METERS
-  ) {
+    success: 0,
 
-    console.log(
-      `❌ Clock-out blocked for employee ${employee_id}. Outside geofence.`
-    );
+    message:
+      `Clock-in denied. You are ` +
+      `${distanceFromWorkplace.toFixed(1)} metres ` +
+      `from the nearest authorised workplace.`,
 
-    return res.status(403).json({
-      success: 0,
-      message: `Clock-out denied. You are ${distanceFromWorkplace.toFixed(1)} metres from the permitted clock-out point.`,
-      distance: Number(
+    distance:
+      Number(
         distanceFromWorkplace.toFixed(1)
       ),
-      allowedRadius: GEOFENCE_RADIUS_METERS
+
+    allowedRadius:
+      geofence.allowedRadius
+
+  });
+
+}
+
+
+try {
+
+  // --------------------------------------------------
+  // Check employee exists
+  // --------------------------------------------------
+
+  const [employee] = await db.query(
+    `
+    SELECT id
+    FROM users
+    WHERE id = ?
+    LIMIT 1
+    `,
+    [employee_id]
+  );
+
+
+  if (employee.length === 0) {
+
+    return res.status(404).json({
+      success: 0,
+      message: 'Employee not found.'
     });
 
   }
 
 
-  try {
+  
 
     // --------------------------------------------------
     // Find employee's active shift
@@ -3468,7 +4381,7 @@ app.put(
     // --------------------------------------------------
 
     const verifiedLocationStatus =
-      `Sol Plaatje University Central Campus ✅ (${distanceFromWorkplace.toFixed(1)}m)`;
+  `${geofence.locationName} ✅ (${distanceFromWorkplace.toFixed(1)}m)`;
 
 
     // --------------------------------------------------
@@ -3879,7 +4792,7 @@ app.get(
 
 app.get(
   '/api/management/attendance-by-date',
-  requireManagement,
+  requireSupervisorAccess,
   async (req, res) => {
 
   try {
@@ -4075,7 +4988,7 @@ app.get(
 
 app.get(
   '/api/management/attendance-weekly',
-  requireManagement,
+  requireFinanceAccess,
   async (req, res) => {
 
     try {
@@ -4140,18 +5053,22 @@ app.get(
             a.clock_in,
             a.clock_out,
 
-            CASE
-              WHEN a.clock_out IS NULL
-              THEN ROUND(
-                TIMESTAMPDIFF(
-                  SECOND,
-                  a.clock_in,
-                  NOW()
-                ) / 3600,
-                2
-              )
-              ELSE a.total_hours
-            END AS total_hours,
+           CASE
+  WHEN a.clock_out IS NULL
+  THEN 0
+
+  ELSE COALESCE(
+    a.total_hours,
+    ROUND(
+      TIMESTAMPDIFF(
+        SECOND,
+        a.clock_in,
+        a.clock_out
+      ) / 3600,
+      2
+    )
+  )
+END AS total_hours,
 
             a.location_status,
             a.sync_status,
@@ -4173,11 +5090,19 @@ app.get(
               'Employee'
             ) AS position,
 
-            CASE
-              WHEN a.clock_out IS NULL
-              THEN 'On Duty'
-              ELSE 'Completed'
-            END AS attendance_status
+          CASE
+  WHEN a.sync_status = 'Auto Closed - Review'
+  THEN 'Auto Closed - Review'
+
+  WHEN a.clock_out IS NULL
+       AND DATE(a.clock_in) = CURDATE()
+  THEN 'On Duty'
+
+  WHEN a.clock_out IS NULL
+  THEN 'Open Shift - Review'
+
+  ELSE 'Completed'
+END AS attendance_status
 
           FROM attendance a
 
@@ -4304,10 +5229,20 @@ app.get(
 // START SERVER
 // ======================================================
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
 
   console.log(
     `🚀 Server running on port ${PORT}`
+  );
+
+  // Check once immediately when server starts
+  await closeStaleAttendanceShifts();
+
+
+  // Check again every 30 minutes
+  setInterval(
+    closeStaleAttendanceShifts,
+    30 * 60 * 1000
   );
 
 });

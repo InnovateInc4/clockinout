@@ -6,8 +6,37 @@ import axios from 'axios';
 // MANAGEMENT VIEW
 // ======================================================
 
-const ManagementView = ({ config }) => {
+const ManagementView = ({
+  config,
+  userRole
+}) => {
 
+  // ======================================================
+// CURRENT USER ROLE
+// ======================================================
+
+const normalizedUserRole =
+  String(userRole || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_');
+
+
+const isFullManagement =
+  normalizedUserRole === 'admin' ||
+  normalizedUserRole === 'manager';
+
+
+const isSupervisor =
+  normalizedUserRole === 'supervisor';
+
+
+const isHRAdmin =
+  normalizedUserRole === 'hr_admin';
+
+
+const isFinance =
+  normalizedUserRole === 'finance';
 
   // ======================================================
   // LOCAL DATE
@@ -46,12 +75,99 @@ const ManagementView = ({ config }) => {
 const [
   activeManagementSection,
   setActiveManagementSection
-] = useState('overview');
+] = useState(
+  isFinance
+    ? 'reports'
+    : 'overview'
+);
 
 const [
   activeReportSection,
   setActiveReportSection
 ] = useState('weekly');
+// ======================================================
+// MANAGEMENT SECTIONS BY ROLE
+// ======================================================
+
+const managementSections = [
+
+  ...(
+    isFullManagement ||
+    isSupervisor ||
+    isHRAdmin
+      ? [
+          {
+            key: 'overview',
+            label: 'Overview'
+          }
+        ]
+      : []
+  ),
+
+  ...(
+    isFullManagement ||
+    isSupervisor ||
+    isHRAdmin
+      ? [
+          {
+            key: 'attendance',
+            label: 'Attendance'
+          }
+        ]
+      : []
+  ),
+
+  ...(
+    isFullManagement ||
+    isHRAdmin ||
+    isFinance
+      ? [
+          {
+            key: 'reports',
+            label: 'Reports'
+          }
+        ]
+      : []
+  ),
+
+  ...(
+    isFullManagement ||
+    isHRAdmin
+      ? [
+          {
+            key: 'employees',
+            label: 'Employees'
+          }
+        ]
+      : []
+  ),
+
+  ...(
+    isFullManagement ||
+    isSupervisor ||
+    isHRAdmin
+      ? [
+          {
+            key: 'leave',
+            label: 'Leave'
+          }
+        ]
+      : []
+  ),
+
+  ...(
+    isFullManagement ||
+    isHRAdmin
+      ? [
+          {
+            key: 'audit',
+            label: 'Audit Logs'
+          }
+        ]
+      : []
+  )
+
+];
 
   const [liveStaff, setLiveStaff] =
     useState([]);
@@ -87,11 +203,12 @@ const [
     employeeEditForm,
     setEmployeeEditForm
   ] = useState({
-    department: '',
-    position: '',
-    employment_status: 'Active',
-    account_status: 'Active'
-  });
+  department: '',
+  position: '',
+  role: 'worker',
+  employment_status: 'Active',
+  account_status: 'Active'
+});
 
   const [
     workforceOverview,
@@ -114,6 +231,7 @@ const [
   ] = useState(
     getLocalDateString()
   );
+  
   // ======================================================
 // WEEKLY ATTENDANCE REPORT STATE
 // ======================================================
@@ -263,16 +381,22 @@ const monthlyReportSummary = {
     ).size,
 
   completedShifts:
-    monthlyAttendance.filter(
-      (record) =>
-        record.clock_out
-    ).length,
+  monthlyAttendance.filter(
+    (record) =>
+      String(
+        record.status || ''
+      ).toLowerCase() ===
+      'completed'
+  ).length,
 
-  stillWorking:
-    monthlyAttendance.filter(
-      (record) =>
-        !record.clock_out
-    ).length,
+stillWorking:
+  monthlyAttendance.filter(
+    (record) =>
+      String(
+        record.status || ''
+      ).toLowerCase() ===
+      'on duty'
+  ).length,
 
   totalHours:
     monthlyAttendance.reduce(
@@ -497,18 +621,32 @@ const [documentUploadForm, setDocumentUploadForm] =
   // LOAD MANAGEMENT DASHBOARD DATA
   // ======================================================
 
-  const fetchDashboardData = async () => {
+  // ======================================================
+// LOAD MANAGEMENT DASHBOARD DATA - ROLE AWARE
+// ======================================================
 
-    try {
+const fetchDashboardData = async () => {
+
+  try {
+
+    setLoading(true);
+
+
+    // --------------------------------------------------
+    // ADMIN / LEGACY MANAGER
+    // Full access
+    // --------------------------------------------------
+
+    if (isFullManagement) {
 
       const [
-  liveRes,
-  suggestionRes,
-  leaveRes,
-  overviewRes,
-  employeesRes,
-  auditRes
-] = await Promise.all([
+        liveRes,
+        suggestionRes,
+        leaveRes,
+        overviewRes,
+        employeesRes,
+        auditRes
+      ] = await Promise.all([
 
         axios.get(
           '/api/management/live-staff',
@@ -534,17 +672,14 @@ const [documentUploadForm, setDocumentUploadForm] =
           '/api/management/employees',
           config
         ),
+
         axios.get(
-  '/api/management/audit-logs',
-  config
-)
+          '/api/management/audit-logs',
+          config
+        )
 
       ]);
 
-
-      // ------------------------------------------
-      // LIVE STAFF
-      // ------------------------------------------
 
       const staffFromApi =
         liveRes.data.staff || [];
@@ -563,32 +698,89 @@ const [documentUploadForm, setDocumentUploadForm] =
         );
 
 
-      setLiveStaff(
-        uniqueStaff
-      );
-
-
-      // ------------------------------------------
-      // FEEDBACK
-      // ------------------------------------------
+      setLiveStaff(uniqueStaff);
 
       setSuggestions(
         suggestionRes.data || []
       );
 
-
-      // ------------------------------------------
-      // LEAVE
-      // ------------------------------------------
-
       setLeaveRequests(
         leaveRes.data || []
       );
 
+      setWorkforceOverview(
+        overviewRes.data.overview || {
+          total_employees: 0,
+          on_duty: 0,
+          off_duty: 0,
+          on_leave: 0
+        }
+      );
 
-      // ------------------------------------------
-      // WORKFORCE
-      // ------------------------------------------
+      setEmployees(
+        employeesRes.data.employees || []
+      );
+
+      setAuditLogs(
+        auditRes.data.logs || []
+      );
+
+    }
+
+
+    // --------------------------------------------------
+    // SUPERVISOR
+    // Overview + Attendance + Leave
+    // --------------------------------------------------
+
+    else if (isSupervisor) {
+
+      const [
+        liveRes,
+        leaveRes,
+        overviewRes
+      ] = await Promise.all([
+
+        axios.get(
+          '/api/management/live-staff',
+          config
+        ),
+
+        axios.get(
+          '/api/tickets/get-leave-requests',
+          config
+        ),
+
+        axios.get(
+          '/api/management/today-overview',
+          config
+        )
+
+      ]);
+
+
+      const staffFromApi =
+        liveRes.data.staff || [];
+
+
+      const uniqueStaff =
+        Array.from(
+          new Map(
+            staffFromApi.map(
+              (staff) => [
+                staff.employee_id,
+                staff
+              ]
+            )
+          ).values()
+        );
+
+
+      setLiveStaff(uniqueStaff);
+
+      setLeaveRequests(
+        leaveRes.data || []
+      );
 
       setWorkforceOverview(
         overviewRes.data.overview || {
@@ -600,34 +792,143 @@ const [documentUploadForm, setDocumentUploadForm] =
       );
 
 
-      // ------------------------------------------
-      // EMPLOYEE DIRECTORY
-      // ------------------------------------------
+      // Supervisor is not allowed to load
+      // employee management or audit information.
+
+      setEmployees([]);
+      setAuditLogs([]);
+      setSuggestions([]);
+
+    }
+
+
+    // --------------------------------------------------
+    // HR ADMIN
+    // Workforce + Employees + Leave + Audit
+    // --------------------------------------------------
+
+    else if (isHRAdmin) {
+
+      const [
+        liveRes,
+        leaveRes,
+        overviewRes,
+        employeesRes,
+        auditRes
+      ] = await Promise.all([
+
+        axios.get(
+          '/api/management/live-staff',
+          config
+        ),
+
+        axios.get(
+          '/api/tickets/get-leave-requests',
+          config
+        ),
+
+        axios.get(
+          '/api/management/today-overview',
+          config
+        ),
+
+        axios.get(
+          '/api/management/employees',
+          config
+        ),
+
+        axios.get(
+          '/api/management/audit-logs',
+          config
+        )
+
+      ]);
+
+
+      const staffFromApi =
+        liveRes.data.staff || [];
+
+
+      const uniqueStaff =
+        Array.from(
+          new Map(
+            staffFromApi.map(
+              (staff) => [
+                staff.employee_id,
+                staff
+              ]
+            )
+          ).values()
+        );
+
+
+      setLiveStaff(uniqueStaff);
+
+      setLeaveRequests(
+        leaveRes.data || []
+      );
+
+      setWorkforceOverview(
+        overviewRes.data.overview || {
+          total_employees: 0,
+          on_duty: 0,
+          off_duty: 0,
+          on_leave: 0
+        }
+      );
 
       setEmployees(
         employeesRes.data.employees || []
       );
+
       setAuditLogs(
-  auditRes.data.logs || []
-);
-
-
-      setLoading(false);
-
-
-    } catch (err) {
-
-      console.error(
-        '❌ Management dashboard error:',
-        err.response?.data ||
-        err.message
+        auditRes.data.logs || []
       );
 
-      setLoading(false);
+      setSuggestions([]);
 
     }
 
-  };
+
+    // --------------------------------------------------
+    // FINANCE
+    // Reports are loaded separately from the Reports tab.
+    // Do not request HR / Supervisor APIs here.
+    // --------------------------------------------------
+
+    else if (isFinance) {
+
+      setLiveStaff([]);
+      setSuggestions([]);
+      setLeaveRequests([]);
+      setEmployees([]);
+      setAuditLogs([]);
+
+      setWorkforceOverview({
+        total_employees: 0,
+        on_duty: 0,
+        off_duty: 0,
+        on_leave: 0
+      });
+
+    }
+
+
+    setLoading(false);
+
+  } catch (err) {
+
+    console.error(
+      '❌ Management dashboard error:',
+      err.response?.data ||
+      err.message
+    );
+
+    setLoading(false);
+
+  }
+
+};
 
 
   // ======================================================
@@ -1715,9 +2016,17 @@ const exportWeeklyAttendanceCSV = () => {
 
     fetchDashboardData();
 
-    fetchAttendanceByDate(
-      getLocalDateString()
-    );
+if (
+  isFullManagement ||
+  isSupervisor ||
+  isHRAdmin
+) {
+
+  fetchAttendanceByDate(
+    getLocalDateString()
+  );
+
+}
 
 
     const interval =
@@ -2450,23 +2759,28 @@ const deleteEmployeeDocument = async (
 
     setEmployeeEditForm({
 
-      department:
-        selectedEmployee.department ||
-        'General',
+  department:
+    selectedEmployee.department ||
+    'General',
 
-      position:
-        selectedEmployee.position ||
-        'Employee',
+  position:
+    selectedEmployee.position ||
+    'Employee',
 
-      employment_status:
-        selectedEmployee.employment_status ||
-        'Active',
+  role:
+    selectedEmployee.role === 'employee'
+      ? 'worker'
+      : selectedEmployee.role || 'worker',
 
-      account_status:
-        selectedEmployee.account_status ||
-        'Active'
+  employment_status:
+    selectedEmployee.employment_status ||
+    'Active',
 
-    });
+  account_status:
+    selectedEmployee.account_status ||
+    'Active'
+
+});
 
 
     setIsEditingEmployee(
@@ -3886,9 +4200,11 @@ const deleteEmployeeDocument = async (
                 >
 
                   You are editing this employee's
-                  municipal personnel record. System
-                  role changes are kept separate for
-                  security.
+municipal personnel record. Role
+changes control which parts of the
+system the employee may access.
+Administrator and legacy Manager
+roles cannot be changed here.
 
                 </div>
 
@@ -3971,6 +4287,92 @@ const deleteEmployeeDocument = async (
                   </div>
 
 
+{/* SYSTEM ROLE */}
+
+<div>
+
+  <label style={labelStyle}>
+    System Role
+  </label>
+
+  <select
+
+    value={
+      employeeEditForm.role
+    }
+
+    onChange={(
+      event
+    ) => {
+
+      setEmployeeEditForm({
+
+        ...employeeEditForm,
+
+        role:
+          event.target.value
+
+      });
+
+    }}
+
+    style={inputStyle}
+
+    disabled={
+      ['admin', 'manager'].includes(
+        String(
+          selectedEmployee?.role || ''
+        ).toLowerCase()
+      )
+    }
+
+  >
+
+    {
+      ['admin', 'manager'].includes(
+        String(
+          selectedEmployee?.role || ''
+        ).toLowerCase()
+      ) && (
+
+        <option
+          value={
+            String(
+              selectedEmployee.role
+            ).toLowerCase()
+          }
+        >
+          {
+            String(
+              selectedEmployee.role
+            ).toLowerCase() === 'admin'
+              ? 'Administrator (System Role)'
+              : 'Manager (System Role)'
+          }
+        </option>
+
+      )
+    }
+
+    <option value="worker">
+      Worker
+    </option>
+
+    <option value="supervisor">
+      Supervisor
+    </option>
+
+    <option value="hr_admin">
+      HR Admin
+    </option>
+
+    <option value="finance">
+      Finance
+    </option>
+
+  </select>
+
+</div>
                   {/* EMPLOYMENT STATUS */}
 
                   <div>
@@ -4852,32 +5254,7 @@ const deleteEmployeeDocument = async (
   }}
 >
 
-  {[
-    {
-      key: 'overview',
-      label: 'Overview'
-    },
-    {
-      key: 'attendance',
-      label: 'Attendance'
-    },
-    {
-      key: 'reports',
-      label: 'Reports'
-    },
-    {
-      key: 'employees',
-      label: 'Employees'
-    },
-    {
-      key: 'leave',
-      label: 'Leave'
-    },
-    {
-      key: 'audit',
-      label: 'Audit Logs'
-    }
-  ].map((item) => {
+  {managementSections.map((item) => {
 
     const isActive =
       activeManagementSection ===
