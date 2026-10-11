@@ -693,6 +693,55 @@ const loadEmployeeNotifications = async () => {
 
 };
 // ======================================================
+// MARK EMPLOYEE NOTIFICATIONS AS READ
+// ======================================================
+
+const markEmployeeNotificationRead = async (notificationId) => {
+  try {
+    await axios.put(
+      `/api/employee/notifications/${notificationId}/read`,
+      {},
+      props.config
+    );
+
+    setEmployeeNotifications((current) =>
+      current.map((notification) =>
+        notification.id === notificationId
+          ? { ...notification, is_read: 1 }
+          : notification
+      )
+    );
+  } catch (err) {
+    console.error(
+      '❌ Error marking notification as read:',
+      err.response?.data || err.message
+    );
+  }
+};
+
+const markAllEmployeeNotificationsRead = async () => {
+  try {
+    await axios.put(
+      '/api/employee/notifications/read-all',
+      {},
+      props.config
+    );
+
+    setEmployeeNotifications((current) =>
+      current.map((notification) => ({
+        ...notification,
+        is_read: 1
+      }))
+    );
+  } catch (err) {
+    console.error(
+      '❌ Error marking notifications as read:',
+      err.response?.data || err.message
+    );
+  }
+};
+
+// ======================================================
 // LOAD EMPLOYEE LEAVE BALANCES
 // ======================================================
 
@@ -1353,11 +1402,13 @@ setTaskDescription("");
             err.response?.data || err.message
         );
 
+        const networkFailure = !err.response;
+
         props.showAlert(
-            err.response?.data?.message ||
-            err.message ||
-            "Attendance database error.",
-            "danger"
+            networkFailure
+                ? "You appear to be offline. Attendance was NOT recorded. Reconnect and try again so the geofence and official system time can be verified."
+                : err.response?.data?.message || err.message || "Attendance database error.",
+            networkFailure ? "warning" : "danger"
         );
 
     }
@@ -1370,6 +1421,9 @@ setTaskDescription("");
 
         // Always load attendance history and current duty state
         populateFields();
+
+        // Load notifications once so the unread badge is accurate.
+        loadEmployeeNotifications();
 
         if (props.getTickets) {
             props.getTickets(props.userEmail);
@@ -2743,6 +2797,92 @@ useEffect(() => {
 
     </div>
 
+)}
+
+{/* ======================================================
+    EMPLOYEE NOTIFICATIONS WORKSPACE
+====================================================== */}
+
+{activeEmployeeSection === "notifications" && (
+  <div
+    className="glass-card"
+    style={{
+      background: 'rgba(255,255,255,0.9)',
+      backdropFilter: 'blur(16px)',
+      borderRadius: '24px',
+      padding: '32px',
+      marginBottom: '24px',
+      border: '1px solid #e2e8f0',
+      boxShadow: '0 8px 30px rgba(15,23,42,0.06)'
+    }}
+  >
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap', marginBottom: '24px' }}>
+      <div>
+        <div style={{ fontSize: '0.75rem', fontWeight: '900', color: '#047857', textTransform: 'uppercase', letterSpacing: '0.7px', marginBottom: '6px' }}>
+          Employee Alerts
+        </div>
+        <h2 style={{ margin: 0, color: '#0f172a', fontSize: '1.6rem' }}>
+          🔔 My Notifications
+        </h2>
+      </div>
+
+      {employeeNotifications.some((notification) => Number(notification.is_read) === 0) && (
+        <button
+          type="button"
+          onClick={markAllEmployeeNotificationsRead}
+          style={{ padding: '10px 15px', borderRadius: '11px', border: '1px solid #a7f3d0', background: '#ecfdf5', color: '#047857', fontWeight: '900', cursor: 'pointer' }}
+        >
+          Mark all as read
+        </button>
+      )}
+    </div>
+
+    {notificationsLoading ? (
+      <div style={{ padding: '20px', color: '#64748b' }}>Loading notifications...</div>
+    ) : employeeNotifications.length === 0 ? (
+      <div style={{ padding: '22px', backgroundColor: '#f8fafc', borderRadius: '14px', color: '#64748b', border: '1px solid #e2e8f0' }}>
+        You have no notifications.
+      </div>
+    ) : (
+      employeeNotifications.map((notification) => (
+        <div
+          key={notification.id}
+          style={{
+            padding: '18px',
+            marginBottom: '12px',
+            borderRadius: '16px',
+            backgroundColor: Number(notification.is_read) === 0 ? '#ecfdf5' : '#ffffff',
+            border: Number(notification.is_read) === 0 ? '1px solid #6ee7b7' : '1px solid #e2e8f0'
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '15px' }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: '900', color: '#0f172a', fontSize: '1rem' }}>{notification.title}</div>
+              <div style={{ marginTop: '8px', color: '#475569', fontSize: '0.9rem', lineHeight: '1.5' }}>{notification.message}</div>
+            </div>
+            {Number(notification.is_read) === 0 && (
+              <span style={{ backgroundColor: '#047857', color: '#ffffff', padding: '5px 10px', borderRadius: '999px', fontSize: '0.7rem', fontWeight: '900' }}>NEW</span>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginTop: '14px' }}>
+            <div style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
+              {notification.created_at ? new Date(notification.created_at).toLocaleString() : ''}
+            </div>
+            {Number(notification.is_read) === 0 && (
+              <button
+                type="button"
+                onClick={() => markEmployeeNotificationRead(notification.id)}
+                style={{ padding: '8px 12px', borderRadius: '10px', border: '1px solid #a7f3d0', background: '#ffffff', color: '#047857', fontWeight: '900', cursor: 'pointer', fontSize: '0.78rem' }}
+              >
+                Mark as read
+              </button>
+            )}
+          </div>
+        </div>
+      ))
+    )}
+  </div>
 )}
 
     {/* GPS VERIFICATION BAR */}

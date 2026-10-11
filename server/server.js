@@ -2318,6 +2318,7 @@ app.get(
           FROM notifications
           WHERE user_id = ?
           ORDER BY created_at DESC
+          LIMIT 50
           `,
           [employeeId]
         );
@@ -2354,6 +2355,91 @@ app.get(
 // ------------------------------------------------------
 // 4. Get Leave Requests
 // ------------------------------------------------------
+// ======================================================
+// EMPLOYEE - MARK ALL OWN NOTIFICATIONS AS READ
+// ======================================================
+
+app.put(
+  '/api/employee/notifications/read-all',
+  requireAuth,
+  async (req, res) => {
+    try {
+      const [result] = await db.query(
+        `
+        UPDATE notifications
+        SET is_read = 1
+        WHERE user_id = ?
+          AND is_read = 0
+        `,
+        [req.user.userId]
+      );
+
+      return res.status(200).json({
+        success: 1,
+        message: 'Notifications marked as read.',
+        updated: result.affectedRows
+      });
+    } catch (err) {
+      console.error('❌ Mark-all notifications error:', err);
+      return res.status(500).json({
+        success: 0,
+        message: 'Unable to update notifications.',
+        details: err.sqlMessage || err.message
+      });
+    }
+  }
+);
+
+// ======================================================
+// EMPLOYEE - MARK OWN NOTIFICATION AS READ
+// ======================================================
+
+app.put(
+  '/api/employee/notifications/:id/read',
+  requireAuth,
+  async (req, res) => {
+    const notificationId = Number(req.params.id);
+
+    if (!Number.isInteger(notificationId) || notificationId <= 0) {
+      return res.status(400).json({
+        success: 0,
+        message: 'Invalid notification ID.'
+      });
+    }
+
+    try {
+      const [result] = await db.query(
+        `
+        UPDATE notifications
+        SET is_read = 1
+        WHERE id = ?
+          AND user_id = ?
+        `,
+        [notificationId, req.user.userId]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          success: 0,
+          message: 'Notification not found.'
+        });
+      }
+
+      return res.status(200).json({
+        success: 1,
+        message: 'Notification marked as read.'
+      });
+    } catch (err) {
+      console.error('❌ Notification read update error:', err);
+      return res.status(500).json({
+        success: 0,
+        message: 'Unable to update notification.',
+        details: err.sqlMessage || err.message
+      });
+    }
+  }
+);
+
 app.get(
   '/api/tickets/get-leave-requests',
   requireSupervisorAccess,
@@ -3258,24 +3344,35 @@ const notificationMessage =
     : `Your ${leaveType} request has been denied.`;
 
 
-await db.query(
-  `
-  INSERT INTO notifications (
-    user_id,
-    notification_type,
-    title,
-    message,
-    is_read
-  )
-  VALUES (?, ?, ?, ?, 0)
-  `,
-  [
-    leaveRequest.employee_id,
-    'leave',
-    notificationTitle,
-    notificationMessage
-  ]
-);
+try {
+
+  await db.query(
+    `
+    INSERT INTO notifications (
+      user_id,
+      notification_type,
+      title,
+      message,
+      is_read
+    )
+    VALUES (?, ?, ?, ?, 0)
+    `,
+    [
+      leaveRequest.employee_id,
+      'leave',
+      notificationTitle,
+      notificationMessage
+    ]
+  );
+
+} catch (notificationError) {
+
+  console.error(
+    '❌ Leave notification error:',
+    notificationError
+  );
+
+}
 
 
       return res.status(200).json({
@@ -6228,7 +6325,7 @@ if (signatureRows.length > 0) {
 
 app.post(
   '/api/management/attendance-weekly/sign',
-  requireSupervisorAccess,
+  requireHRAccess,
   async (req, res) => {
 
     try {
@@ -6462,6 +6559,13 @@ app.post(
 
 
       // --------------------------------------------------
+      if (attendance.length === 0) {
+        return res.status(400).json({
+          success: 0,
+          message: 'There are no attendance records in this weekly report to sign.'
+        });
+      }
+
       // CREATE REPORT HASH
       // --------------------------------------------------
 
@@ -6561,6 +6665,13 @@ app.post(
         );
 
 
+      await writeAuditLog(
+        req.user.userId,
+        'WEEKLY_ATTENDANCE_REPORT_SIGNED',
+        `Weekly attendance report ${start} to ${end} digitally signed. Signature ID: ${result.insertId}. Records: ${attendance.length}.`,
+        req.ip
+      );
+
       return res.status(201).json({
 
         success: 1,
@@ -6625,6 +6736,31 @@ app.post(
 
     }
 
+  }
+);
+
+// ======================================================
+// SYSTEM - AUTHORITATIVE DATABASE TIME
+// ======================================================
+
+app.get(
+  '/api/system/time',
+  requireAuth,
+  async (req, res) => {
+    try {
+      const [rows] = await db.query('SELECT NOW(3) AS server_time');
+      return res.status(200).json({
+        success: 1,
+        server_time: rows[0].server_time,
+        source: 'MySQL server time'
+      });
+    } catch (err) {
+      console.error('❌ Server time error:', err);
+      return res.status(500).json({
+        success: 0,
+        message: 'Unable to retrieve authoritative server time.'
+      });
+    }
   }
 );
 

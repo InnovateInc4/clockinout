@@ -6499,7 +6499,7 @@ roles cannot be changed here.
 >
   Export CSV
 </button>
-{(isFullManagement || isHRAdmin || isSupervisor) && (
+{(isFullManagement || isHRAdmin) && (
 
   <button
     onClick={
