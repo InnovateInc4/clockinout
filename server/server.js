@@ -4,6 +4,7 @@ require('dotenv').config();
 const db = require('./db');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 
 const JWT_SECRET =
   process.env.JWT_SECRET;
@@ -1476,12 +1477,245 @@ app.get(
           err.sqlMessage ||
           err.message
 
+     
+    });
+
+  }
+
+});
+      
+      // ======================================================
+// MANAGEMENT - ABSENTEEISM REPORT
+// Finance-safe report endpoint
+// ======================================================
+
+app.get(
+  '/api/management/absenteeism',
+  requireFinanceAccess,
+  async (req, res) => {
+
+    try {
+
+      const selectedDate =
+        req.query.date;
+
+
+      // --------------------------------------------------
+      // VALIDATE DATE
+      // --------------------------------------------------
+
+      if (!selectedDate) {
+
+        return res.status(400).json({
+          success: 0,
+          message:
+            'Please provide a date.'
+        });
+
+      }
+
+
+      const datePattern =
+        /^\d{4}-\d{2}-\d{2}$/;
+
+
+      if (
+        !datePattern.test(
+          selectedDate
+        )
+      ) {
+
+        return res.status(400).json({
+          success: 0,
+          message:
+            'Invalid date format. Use YYYY-MM-DD.'
+        });
+
+      }
+
+
+      // --------------------------------------------------
+      // FIND ACTIVE EMPLOYEES WHO:
+      // 1. DID NOT CLOCK IN
+      // 2. ARE NOT ON APPROVED LEAVE
+      // --------------------------------------------------
+
+      const [rows] =
+        await db.query(
+          `
+          SELECT
+            u.id,
+
+            TRIM(
+              CONCAT(
+                COALESCE(u.name, ''),
+                ' ',
+                COALESCE(u.surname, '')
+              )
+            ) AS name,
+
+            COALESCE(
+              d.name,
+              u.department,
+              'General'
+            ) AS department,
+
+            COALESCE(
+              p.title,
+              u.position,
+              'Employee'
+            ) AS position
+
+          FROM users u
+
+          LEFT JOIN departments d
+            ON u.department_id = d.id
+
+          LEFT JOIN positions p
+            ON u.position_id = p.id
+
+          WHERE
+            LOWER(
+              COALESCE(
+                u.employment_status,
+                'Active'
+              )
+            ) = 'active'
+
+          AND
+            LOWER(
+              COALESCE(
+                u.account_status,
+                'Active'
+              )
+            ) = 'active'
+
+          AND NOT EXISTS (
+
+            SELECT 1
+
+            FROM attendance a
+
+            WHERE
+              a.employee_id = u.id
+
+            AND
+              DATE(a.clock_in) = ?
+
+          )
+
+          AND NOT EXISTS (
+
+            SELECT 1
+
+            FROM leave_requests lr
+
+            WHERE
+              lr.employee_id = u.id
+
+            AND
+              LOWER(
+                COALESCE(
+                  lr.status,
+                  ''
+                )
+              ) = 'approved'
+
+            AND
+              ? BETWEEN
+                lr.start_date
+                AND lr.end_date
+
+          )
+
+          ORDER BY
+            u.name ASC,
+            u.surname ASC
+          `,
+          [
+            selectedDate,
+            selectedDate
+          ]
+        );
+
+
+      // --------------------------------------------------
+      // RETURN REPORT-SAFE DATA ONLY
+      // --------------------------------------------------
+
+      const absenteeism =
+        rows.map(
+          (employee) => ({
+
+            id:
+              employee.id,
+
+            name:
+              employee.name ||
+              'Unknown Employee',
+
+            department:
+              employee.department,
+
+            position:
+              employee.position,
+
+            absence_date:
+              selectedDate,
+
+            absence_status:
+              'Absent',
+
+            reason:
+              'No attendance record'
+
+          })
+        );
+
+
+      return res.status(200).json({
+
+        success: 1,
+
+        date:
+          selectedDate,
+
+        count:
+          absenteeism.length,
+
+        absenteeism:
+          absenteeism
+
+      });
+
+
+    } catch (err) {
+
+      console.error(
+        '❌ Absenteeism report error:',
+        err
+      );
+
+
+      return res.status(500).json({
+
+        success: 0,
+
+        message:
+          'Server error generating absenteeism report.',
+
+        details:
+          err.sqlMessage ||
+          err.message
+
       });
 
     }
 
   }
 );
+
+   
 
 // ======================================================
 // MANAGEMENT - UPDATE EMPLOYEE
@@ -1561,6 +1795,42 @@ const validRoles = [
   'admin',
   'manager'
 ];
+
+// --------------------------------------------------
+// PREVENT HR ADMIN FROM MANAGING ADMIN / MANAGER ROLES
+// --------------------------------------------------
+
+const requestingUserRole =
+  normalizeSystemRole(
+    req.user.role
+  );
+
+
+const protectedManagementRoles = [
+  'admin',
+  'manager'
+];
+
+
+if (
+  requestingUserRole === 'hr_admin' &&
+  (
+    protectedManagementRoles.includes(
+      currentRole
+    ) ||
+    protectedManagementRoles.includes(
+      requestedRole
+    )
+  )
+) {
+
+  return res.status(403).json({
+    success: 0,
+    message:
+      'HR administrators cannot assign or modify Admin or Manager accounts.'
+  });
+
+}
 
 
 if (
@@ -2020,6 +2290,67 @@ app.get('/api/employee/leave-requests', async (req, res) => {
 
 });
 
+// ======================================================
+// EMPLOYEE - GET OWN NOTIFICATIONS
+// ======================================================
+
+app.get(
+  '/api/employee/notifications',
+  requireAuth,
+  async (req, res) => {
+
+    try {
+
+      const employeeId =
+        req.user.userId;
+
+
+      const [rows] =
+        await db.query(
+          `
+          SELECT
+            id,
+            notification_type,
+            title,
+            message,
+            is_read,
+            created_at
+          FROM notifications
+          WHERE user_id = ?
+          ORDER BY created_at DESC
+          `,
+          [employeeId]
+        );
+
+
+      return res.status(200).json({
+        success: 1,
+        notifications: rows
+      });
+
+
+    } catch (err) {
+
+      console.error(
+        '❌ Employee notifications error:',
+        err
+      );
+
+
+      return res.status(500).json({
+        success: 0,
+        message:
+          'Unable to retrieve notifications.',
+        details:
+          err.sqlMessage ||
+          err.message
+      });
+
+    }
+
+  }
+);
+
 // ------------------------------------------------------
 // 4. Get Leave Requests
 // ------------------------------------------------------
@@ -2055,6 +2386,325 @@ app.get(
 // ======================================================
 // UPDATE LEAVE STATUS + 30% WORKFORCE CONFLICT CHECK
 // ======================================================
+// ======================================================
+// LEAVE BALANCE HELPERS
+// ======================================================
+
+// Count Monday-Friday only.
+// Weekends do not reduce leave balance.
+const countWorkingLeaveDays = (
+  startValue,
+  endValue
+) => {
+
+  if (!startValue || !endValue) {
+    return 0;
+  }
+
+
+  const startDate =
+    new Date(startValue);
+
+  const endDate =
+    new Date(endValue);
+
+
+  startDate.setHours(
+    0,
+    0,
+    0,
+    0
+  );
+
+  endDate.setHours(
+    0,
+    0,
+    0,
+    0
+  );
+
+
+  if (
+    Number.isNaN(startDate.getTime()) ||
+    Number.isNaN(endDate.getTime()) ||
+    startDate > endDate
+  ) {
+
+    return 0;
+
+  }
+
+
+  let workingDays = 0;
+
+  const currentDate =
+    new Date(startDate);
+
+
+  while (
+    currentDate <= endDate
+  ) {
+
+    const dayOfWeek =
+      currentDate.getDay();
+
+
+    // Sunday = 0
+    // Saturday = 6
+    if (
+      dayOfWeek !== 0 &&
+      dayOfWeek !== 6
+    ) {
+
+      workingDays += 1;
+
+    }
+
+
+    currentDate.setDate(
+      currentDate.getDate() + 1
+    );
+
+  }
+
+
+  return workingDays;
+
+};
+
+
+// Recalculate one employee's balance from
+// all currently approved leave requests.
+const recalculateLeaveBalance =
+  async (
+    employeeId,
+    leaveType
+  ) => {
+
+    const [balanceRows] =
+      await db.query(
+        `
+        SELECT
+          id,
+          allocated_days
+        FROM leave_balances
+        WHERE employee_id = ?
+          AND leave_type = ?
+        LIMIT 1
+        `,
+        [
+          employeeId,
+          leaveType
+        ]
+      );
+
+
+    if (
+      balanceRows.length === 0
+    ) {
+
+      return null;
+
+    }
+
+
+    const allocatedDays =
+      Number(
+        balanceRows[0].allocated_days || 0
+      );
+
+
+    const [approvedRows] =
+      await db.query(
+        `
+        SELECT
+          start_date,
+          end_date
+        FROM leave_requests
+        WHERE employee_id = ?
+          AND type = ?
+          AND LOWER(status) = 'approved'
+        `,
+        [
+          employeeId,
+          leaveType
+        ]
+      );
+
+
+    let usedDays = 0;
+
+
+    approvedRows.forEach(
+      (leave) => {
+
+        usedDays +=
+          countWorkingLeaveDays(
+            leave.start_date,
+            leave.end_date
+          );
+
+      }
+    );
+
+
+    const remainingDays =
+      Math.max(
+        allocatedDays -
+        usedDays,
+        0
+      );
+
+
+    await db.query(
+      `
+      UPDATE leave_balances
+      SET
+        used_days = ?,
+        remaining_days = ?
+      WHERE employee_id = ?
+        AND leave_type = ?
+      `,
+      [
+        usedDays,
+        remainingDays,
+        employeeId,
+        leaveType
+      ]
+    );
+
+
+    return {
+      allocated_days:
+        allocatedDays,
+
+      used_days:
+        usedDays,
+
+      remaining_days:
+        remainingDays
+    };
+
+  };
+
+  // ======================================================
+// EMPLOYEE - VIEW OWN LEAVE BALANCES
+// ======================================================
+
+app.get(
+  '/api/leave/my-balances',
+  requireAuth,
+  async (req, res) => {
+
+    try {
+
+      const employeeId =
+        req.user.userId;
+
+
+      const [rows] =
+        await db.query(
+          `
+          SELECT
+            id,
+            employee_id,
+            leave_type,
+            allocated_days,
+            used_days,
+            remaining_days,
+            cycle_start,
+            cycle_end
+          FROM leave_balances
+          WHERE employee_id = ?
+          ORDER BY
+            CASE leave_type
+              WHEN 'Annual Leave' THEN 1
+              WHEN 'Sick Leave' THEN 2
+              WHEN 'Family Responsibility Leave' THEN 3
+              ELSE 4
+            END,
+            leave_type
+          `,
+          [employeeId]
+        );
+
+
+      const balances =
+        rows.map(
+          (balance) => ({
+
+            id:
+              balance.id,
+
+            employee_id:
+              balance.employee_id,
+
+            leave_type:
+              balance.leave_type,
+
+            allocated_days:
+              Number(
+                balance.allocated_days || 0
+              ),
+
+            used_days:
+              Number(
+                balance.used_days || 0
+              ),
+
+            remaining_days:
+              Number(
+                balance.remaining_days || 0
+              ),
+
+            cycle_start:
+              balance.cycle_start,
+
+            cycle_end:
+              balance.cycle_end
+
+          })
+        );
+
+
+      return res.status(200).json({
+
+        success: 1,
+
+        count:
+          balances.length,
+
+        balances:
+          balances
+
+      });
+
+
+    } catch (err) {
+
+      console.error(
+        '❌ Leave balance retrieval error:',
+        err
+      );
+
+
+      return res.status(500).json({
+
+        success: 0,
+
+        message:
+          'Server error retrieving leave balances.',
+
+        details:
+          err.sqlMessage ||
+          err.message
+
+      });
+
+    }
+
+  }
+);
 
 app.put(
   '/api/tickets/update-leave-status',
@@ -2157,7 +2807,100 @@ app.put(
 
         }
 
+        // --------------------------------------------------
+        // CHECK AVAILABLE LEAVE BALANCE
+        // --------------------------------------------------
 
+        const requestedWorkingDays =
+          countWorkingLeaveDays(
+            leaveRequest.start_date,
+            leaveRequest.end_date
+          );
+
+
+        const currentLeaveStatus =
+          String(
+            leaveRequest.status || ''
+          )
+            .trim()
+            .toLowerCase();
+
+
+        // Only perform a new deduction check when
+        // the request is not already approved.
+        if (
+          currentLeaveStatus !== 'approved'
+        ) {
+
+          const [balanceRows] =
+            await db.query(
+              `
+              SELECT
+                allocated_days,
+                used_days,
+                remaining_days
+              FROM leave_balances
+              WHERE employee_id = ?
+                AND leave_type = ?
+              LIMIT 1
+              `,
+              [
+                leaveRequest.employee_id,
+                leaveRequest.type
+              ]
+            );
+
+
+          if (
+            balanceRows.length === 0
+          ) {
+
+            return res.status(400).json({
+              success: 0,
+              message:
+                `No ${leaveRequest.type} balance exists for this employee.`
+            });
+
+          }
+
+
+          const remainingDays =
+            Number(
+              balanceRows[0]
+                .remaining_days || 0
+            );
+
+
+          if (
+            requestedWorkingDays >
+            remainingDays
+          ) {
+
+            return res.status(409).json({
+
+              success: 0,
+
+              balance_conflict: true,
+
+              message:
+                `Leave approval blocked. ` +
+                `This request requires ${requestedWorkingDays} working day(s), ` +
+                `but the employee only has ${remainingDays.toFixed(2)} day(s) remaining.`,
+
+              leave_type:
+                leaveRequest.type,
+
+              requested_days:
+                requestedWorkingDays,
+
+              remaining_days:
+                remainingDays
+
+            });
+
+          }
+
+        }
         // --------------------------------------------------
         // COUNT ACTIVE EMPLOYEES
         // --------------------------------------------------
@@ -2473,6 +3216,16 @@ app.put(
         ]
       );
 
+      // --------------------------------------------------
+// RECALCULATE EMPLOYEE LEAVE BALANCE
+// --------------------------------------------------
+
+const updatedLeaveBalance =
+  await recalculateLeaveBalance(
+    leaveRequest.employee_id,
+    leaveRequest.type
+  );
+
 
       // --------------------------------------------------
       // AUDIT LOG
@@ -2484,6 +3237,45 @@ app.put(
         `Leave request ID ${id} for employee ID ${leaveRequest.employee_id} was marked as ${finalStatus}.`,
         req.ip
       );
+      // --------------------------------------------------
+// NOTIFY EMPLOYEE ABOUT LEAVE DECISION
+// --------------------------------------------------
+
+const leaveType =
+  leaveRequest.type ||
+  'Leave';
+
+
+const notificationTitle =
+  finalStatus === 'Approved'
+    ? `✅ ${leaveType} Approved`
+    : `❌ ${leaveType} Denied`;
+
+
+const notificationMessage =
+  finalStatus === 'Approved'
+    ? `Your ${leaveType} request has been approved.`
+    : `Your ${leaveType} request has been denied.`;
+
+
+await db.query(
+  `
+  INSERT INTO notifications (
+    user_id,
+    notification_type,
+    title,
+    message,
+    is_read
+  )
+  VALUES (?, ?, ?, ?, 0)
+  `,
+  [
+    leaveRequest.employee_id,
+    'leave',
+    notificationTitle,
+    notificationMessage
+  ]
+);
 
 
       return res.status(200).json({
@@ -2569,8 +3361,9 @@ app.get(
 
 
     const isManagement =
-      loggedInRole === 'admin' ||
-      loggedInRole === 'manager';
+  loggedInRole === 'admin' ||
+  loggedInRole === 'manager' ||
+  loggedInRole === 'hr_admin';
 
 
     const isOwnProfile =
@@ -2736,8 +3529,9 @@ app.get(
     // --------------------------------------------------
 
     const isManagement =
-      loggedInRole === 'admin' ||
-      loggedInRole === 'manager';
+  loggedInRole === 'admin' ||
+  loggedInRole === 'manager' ||
+  loggedInRole === 'hr_admin';
 
     const isOwnProfile =
       loggedInUserId === employeeId;
@@ -2767,7 +3561,7 @@ app.get(
             employee_id,
             document_type,
             file_path,
-            expiry_date,
+            DATE_FORMAT(expiry_date, '%Y-%m-%d') AS expiry_date,
             uploaded_at,
             updated_at
           FROM documents
@@ -2828,8 +3622,15 @@ app.post(
    const {
   employee_id,
   document_type,
-  file_path
+  file_path,
+  expiry_date
 } = req.body;
+
+const normalizedExpiryDate =
+  expiry_date &&
+  String(expiry_date).trim()
+    ? String(expiry_date).trim()
+    : null;
 
 
     const employeeId =
@@ -2866,8 +3667,9 @@ app.post(
     // --------------------------------------------------
 
     const isManagement =
-      loggedInRole === 'admin' ||
-      loggedInRole === 'manager';
+  loggedInRole === 'admin' ||
+  loggedInRole === 'manager' ||
+  loggedInRole === 'hr_admin';
 
     const isOwnProfile =
       loggedInUserId === employeeId;
@@ -2958,14 +3760,16 @@ app.post(
     INSERT INTO documents (
       employee_id,
       document_type,
-      file_path
+      file_path,
+      expiry_date
     )
-    VALUES (?, ?, ?)
+    VALUES (?, ?, ?, ?)
     `,
     [
       employeeId,
       String(document_type).trim(),
-      file_path
+      file_path,
+      normalizedExpiryDate
     ]
   );
 
@@ -3026,7 +3830,7 @@ app.post(
 
 app.delete(
   '/api/documents/:id',
-  requireManagement,
+  requireHRAccess,
   async (req, res) => {
 
     const documentId =
@@ -4505,8 +5309,9 @@ app.get(
 
 
     const isManagement =
-      loggedInRole === 'admin' ||
-      loggedInRole === 'manager';
+  loggedInRole === 'admin' ||
+  loggedInRole === 'manager' ||
+  loggedInRole === 'hr_admin';
 
 
     const isOwnAttendance =
@@ -4983,6 +5788,86 @@ app.get(
 
 });
 // ======================================================
+// WEEKLY ATTENDANCE REPORT HASH
+// ======================================================
+
+const createWeeklyAttendanceReportHash = (
+  startDate,
+  endDate,
+  attendance
+) => {
+
+  const normalizedAttendance =
+    [...attendance]
+      .map((record) => ({
+
+        attendance_id:
+          record.attendance_id,
+
+        employee_id:
+          record.employee_id,
+
+        attendance_date:
+          record.attendance_date,
+
+        name:
+          record.name || '',
+
+        email:
+          record.email || '',
+
+        role:
+          record.role || '',
+
+        department:
+          record.department || '',
+
+        position:
+          record.position || '',
+
+        clock_in:
+          record.clock_in,
+
+        clock_out:
+          record.clock_out,
+
+        total_hours:
+          Number(
+            record.total_hours || 0
+          ),
+
+        location_status:
+          record.location_status || '',
+
+        sync_status:
+          record.sync_status || '',
+
+        status:
+          record.status || ''
+
+      }))
+      .sort(
+        (a, b) =>
+          Number(a.attendance_id) -
+          Number(b.attendance_id)
+      );
+
+
+  const reportData =
+    JSON.stringify({
+      report_type: 'weekly',
+      start_date: startDate,
+      end_date: endDate,
+      attendance: normalizedAttendance
+    });
+
+
+  return crypto
+    .createHash('sha256')
+    .update(reportData)
+    .digest('hex');
+};
+// ======================================================
 // MANAGEMENT REPORTS - WEEKLY ATTENDANCE
 // ======================================================
 
@@ -5091,7 +5976,12 @@ END AS total_hours,
             ) AS position,
 
           CASE
-  WHEN a.sync_status = 'Auto Closed - Review'
+  WHEN a.sync_status =
+       'Auto Clock-Out - Left Geofence'
+  THEN 'Auto Clock-Out - Left Geofence'
+
+  WHEN a.sync_status =
+       'Auto Closed - Review'
   THEN 'Auto Closed - Review'
 
   WHEN a.clock_out IS NULL
@@ -5178,24 +6068,132 @@ END AS attendance_status
 
         }));
 
+        // --------------------------------------------------
+// CHECK WEEKLY REPORT DIGITAL SIGNATURE
+// --------------------------------------------------
+
+const currentReportHash =
+  createWeeklyAttendanceReportHash(
+    startDate,
+    endDate,
+    attendance
+  );
+
+
+const [signatureRows] =
+  await db.query(
+    `
+    SELECT
+      id,
+      report_type,
+
+      DATE_FORMAT(
+        start_date,
+        '%Y-%m-%d'
+      ) AS start_date,
+
+      DATE_FORMAT(
+        end_date,
+        '%Y-%m-%d'
+      ) AS end_date,
+
+      signed_by,
+      signer_name,
+      signer_role,
+      record_count,
+      report_hash,
+      signed_at
+
+    FROM attendance_report_signatures
+
+    WHERE report_type = 'weekly'
+      AND start_date = ?
+      AND end_date = ?
+
+    LIMIT 1
+    `,
+    [
+      startDate,
+      endDate
+    ]
+  );
+
+
+let signature = null;
+
+
+if (signatureRows.length > 0) {
+
+  const savedSignature =
+    signatureRows[0];
+
+
+  const isValid =
+    savedSignature.report_hash ===
+    currentReportHash;
+
+
+  signature = {
+
+    id:
+      savedSignature.id,
+
+    report_type:
+      savedSignature.report_type,
+
+    start_date:
+      savedSignature.start_date,
+
+    end_date:
+      savedSignature.end_date,
+
+    signed_by:
+      savedSignature.signed_by,
+
+    signer_name:
+      savedSignature.signer_name,
+
+    signer_role:
+      savedSignature.signer_role,
+
+    record_count:
+      savedSignature.record_count,
+
+    signed_at:
+      savedSignature.signed_at,
+
+    is_valid:
+      isValid,
+
+    status:
+      isValid
+        ? 'Signed'
+        : 'Changed After Signing'
+
+  };
+
+}
 
       return res.status(200).json({
 
-        success: 1,
+  success: 1,
 
-        start:
-          startDate,
+  start:
+    startDate,
 
-        end:
-          endDate,
+  end:
+    endDate,
 
-        count:
-          attendance.length,
+  count:
+    attendance.length,
 
-        attendance:
-          attendance
+  attendance:
+    attendance,
 
-      });
+  signature:
+    signature
+
+});
 
 
     } catch (err) {
@@ -5224,6 +6222,411 @@ END AS attendance_status
   }
 );
 
+// ======================================================
+// SIGN WEEKLY ATTENDANCE REPORT
+// ======================================================
+
+app.post(
+  '/api/management/attendance-weekly/sign',
+  requireSupervisorAccess,
+  async (req, res) => {
+
+    try {
+
+      const {
+        start,
+        end
+      } = req.body;
+
+
+      if (!start || !end) {
+
+        return res.status(400).json({
+          success: 0,
+          message:
+            'Please provide start and end dates.'
+        });
+
+      }
+
+
+      const datePattern =
+        /^\d{4}-\d{2}-\d{2}$/;
+
+
+      if (
+        !datePattern.test(start) ||
+        !datePattern.test(end)
+      ) {
+
+        return res.status(400).json({
+          success: 0,
+          message:
+            'Invalid date format. Use YYYY-MM-DD.'
+        });
+
+      }
+
+
+      if (start > end) {
+
+        return res.status(400).json({
+          success: 0,
+          message:
+            'Start date cannot be after end date.'
+        });
+
+      }
+
+
+      // --------------------------------------------------
+      // CHECK IF THIS PERIOD IS ALREADY SIGNED
+      // --------------------------------------------------
+
+      const [existingSignatures] =
+        await db.query(
+          `
+          SELECT *
+          FROM attendance_report_signatures
+          WHERE report_type = 'weekly'
+            AND start_date = ?
+            AND end_date = ?
+          LIMIT 1
+          `,
+          [
+            start,
+            end
+          ]
+        );
+
+
+      if (existingSignatures.length > 0) {
+
+        return res.status(409).json({
+          success: 0,
+          message:
+            'This weekly attendance report has already been digitally signed.',
+          signature:
+            existingSignatures[0]
+        });
+
+      }
+
+
+      // --------------------------------------------------
+      // LOAD ATTENDANCE FOR THIS REPORT PERIOD
+      // --------------------------------------------------
+
+      const [rows] =
+        await db.query(
+          `
+          SELECT
+            a.id AS attendance_id,
+            a.employee_id,
+
+            DATE(a.clock_in)
+              AS attendance_date,
+
+            a.clock_in,
+            a.clock_out,
+
+            CASE
+              WHEN a.clock_out IS NULL
+              THEN 0
+
+              ELSE COALESCE(
+                a.total_hours,
+                ROUND(
+                  TIMESTAMPDIFF(
+                    SECOND,
+                    a.clock_in,
+                    a.clock_out
+                  ) / 3600,
+                  2
+                )
+              )
+            END AS total_hours,
+
+            a.location_status,
+            a.sync_status,
+
+            u.name,
+            u.surname,
+            u.email,
+            u.role,
+
+            COALESCE(
+              d.name,
+              u.department,
+              'General'
+            ) AS department,
+
+            COALESCE(
+              p.title,
+              u.position,
+              'Employee'
+            ) AS position,
+
+            CASE
+              WHEN a.sync_status =
+                   'Auto Clock-Out - Left Geofence'
+              THEN 'Auto Clock-Out - Left Geofence'
+
+              WHEN a.sync_status =
+                   'Auto Closed - Review'
+              THEN 'Auto Closed - Review'
+
+              WHEN a.clock_out IS NULL
+                   AND DATE(a.clock_in) = CURDATE()
+              THEN 'On Duty'
+
+              WHEN a.clock_out IS NULL
+              THEN 'Open Shift - Review'
+
+              ELSE 'Completed'
+            END AS attendance_status
+
+          FROM attendance a
+
+          INNER JOIN users u
+            ON a.employee_id = u.id
+
+          LEFT JOIN departments d
+            ON u.department_id = d.id
+
+          LEFT JOIN positions p
+            ON u.position_id = p.id
+
+          WHERE DATE(a.clock_in)
+            BETWEEN ? AND ?
+
+          ORDER BY
+            DATE(a.clock_in) DESC,
+            a.clock_in DESC
+          `,
+          [
+            start,
+            end
+          ]
+        );
+
+
+      const attendance =
+        rows.map((row) => ({
+
+          attendance_id:
+            row.attendance_id,
+
+          employee_id:
+            row.employee_id,
+
+          attendance_date:
+            row.attendance_date,
+
+          name:
+            `${row.name || ''} ${row.surname || ''}`.trim(),
+
+          email:
+            row.email,
+
+          role:
+            row.role,
+
+          department:
+            row.department,
+
+          position:
+            row.position,
+
+          clock_in:
+            row.clock_in,
+
+          clock_out:
+            row.clock_out,
+
+          total_hours:
+            Number(
+              row.total_hours || 0
+            ),
+
+          location_status:
+            row.location_status,
+
+          sync_status:
+            row.sync_status,
+
+          status:
+            row.attendance_status
+
+        }));
+
+
+      // --------------------------------------------------
+      // CREATE REPORT HASH
+      // --------------------------------------------------
+
+      const reportHash =
+        createWeeklyAttendanceReportHash(
+          start,
+          end,
+          attendance
+        );
+
+
+      // --------------------------------------------------
+      // LOAD SIGNER DETAILS
+      // --------------------------------------------------
+
+      const [signerRows] =
+        await db.query(
+          `
+          SELECT
+            id,
+            name,
+            surname,
+            role
+          FROM users
+          WHERE id = ?
+          LIMIT 1
+          `,
+          [
+            req.user.userId
+          ]
+        );
+
+
+      if (signerRows.length === 0) {
+
+        return res.status(404).json({
+          success: 0,
+          message:
+            'Signing user could not be found.'
+        });
+
+      }
+
+
+      const signer =
+        signerRows[0];
+
+
+      const signerName =
+        `${signer.name || ''} ${signer.surname || ''}`
+          .trim();
+
+
+      const signerRole =
+        normalizeSystemRole(
+          signer.role
+        );
+
+
+      // --------------------------------------------------
+      // SAVE DIGITAL SIGNATURE
+      // --------------------------------------------------
+
+      const [result] =
+        await db.query(
+          `
+          INSERT INTO attendance_report_signatures (
+            report_type,
+            start_date,
+            end_date,
+            signed_by,
+            signer_name,
+            signer_role,
+            record_count,
+            report_hash
+          )
+          VALUES (
+            'weekly',
+            ?,
+            ?,
+            ?,
+            ?,
+            ?,
+            ?,
+            ?
+          )
+          `,
+          [
+            start,
+            end,
+            signer.id,
+            signerName,
+            signerRole,
+            attendance.length,
+            reportHash
+          ]
+        );
+
+
+      return res.status(201).json({
+
+        success: 1,
+
+        message:
+          'Weekly attendance report digitally signed successfully.',
+
+        signature: {
+
+          id:
+            result.insertId,
+
+          report_type:
+            'weekly',
+
+          start_date:
+            start,
+
+          end_date:
+            end,
+
+          signed_by:
+            signer.id,
+
+          signer_name:
+            signerName,
+
+          signer_role:
+            signerRole,
+
+          record_count:
+            attendance.length,
+
+          report_hash:
+            reportHash
+
+        }
+
+      });
+
+
+    } catch (err) {
+
+      console.error(
+        '❌ Weekly report signing error:',
+        err
+      );
+
+
+      return res.status(500).json({
+
+        success: 0,
+
+        message:
+          'Server error signing weekly attendance report.',
+
+        details:
+          err.sqlMessage ||
+          err.message
+
+      });
+
+    }
+
+  }
+);
 
 // ======================================================
 // START SERVER

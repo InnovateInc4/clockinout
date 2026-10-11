@@ -49,6 +49,29 @@ const [
     leaveHistoryLoading,
     setLeaveHistoryLoading
 ] = useState(false);
+
+// ======================================================
+// EMPLOYEE NOTIFICATIONS
+// ======================================================
+
+const [
+    employeeNotifications,
+    setEmployeeNotifications
+] = useState([]);
+
+const [
+    notificationsLoading,
+    setNotificationsLoading
+] = useState(false);
+const [
+    leaveBalances,
+    setLeaveBalances
+] = useState([]);
+
+const [
+    leaveBalancesLoading,
+    setLeaveBalancesLoading
+] = useState(false);
     const [capturedPhoto, setCapturedPhoto] = useState(null);
 
     const videoRef = useRef(null);
@@ -626,6 +649,94 @@ useEffect(() => {
     }
 
 };
+// ======================================================
+// LOAD EMPLOYEE NOTIFICATIONS
+// ======================================================
+
+const loadEmployeeNotifications = async () => {
+
+    setNotificationsLoading(true);
+
+    try {
+
+        const response = await axios.get(
+            "/api/employee/notifications",
+            props.config
+        );
+
+        if (response.data.success) {
+
+            setEmployeeNotifications(
+                response.data.notifications || []
+            );
+
+        } else {
+
+            setEmployeeNotifications([]);
+
+        }
+
+    } catch (err) {
+
+        console.error(
+            "❌ Error loading employee notifications:",
+            err.response?.data || err.message
+        );
+
+        setEmployeeNotifications([]);
+
+    } finally {
+
+        setNotificationsLoading(false);
+
+    }
+
+};
+// ======================================================
+// LOAD EMPLOYEE LEAVE BALANCES
+// ======================================================
+
+const loadEmployeeLeaveBalances = async () => {
+
+    setLeaveBalancesLoading(true);
+
+    try {
+
+        const response = await axios.get(
+            "/api/leave/my-balances",
+            props.config
+        );
+
+
+        if (response.data.success) {
+
+            setLeaveBalances(
+                response.data.balances || []
+            );
+
+        } else {
+
+            setLeaveBalances([]);
+
+        }
+
+    } catch (err) {
+
+        console.error(
+            "❌ Error loading leave balances:",
+            err.response?.data ||
+            err.message
+        );
+
+        setLeaveBalances([]);
+
+    } finally {
+
+        setLeaveBalancesLoading(false);
+
+    }
+
+};
     const submitLeaveRequest = async (e) => {
 
     e.preventDefault();
@@ -696,6 +807,7 @@ useEffect(() => {
             endDate: "",
             reason: ""
         });
+        await loadEmployeeLeaveRequests();
 
 
     } catch (err) {
@@ -1901,9 +2013,10 @@ useEffect(() => {
 
     <button
         type="button"
-        onClick={() => {
+       onClick={() => {
     setActiveEmployeeSection("leave");
     loadEmployeeLeaveRequests();
+    loadEmployeeLeaveBalances();
 }}
         style={{
             flex: 1,
@@ -1925,6 +2038,56 @@ useEffect(() => {
         }}
     >
         🗓 Apply for Leave
+    </button>
+    
+        <button
+        type="button"
+        onClick={() => {
+            setActiveEmployeeSection("notifications");
+            loadEmployeeNotifications();
+        }}
+        style={{
+            flex: 1,
+            minWidth: '160px',
+            padding: '14px 18px',
+            borderRadius: '12px',
+            border: 'none',
+            cursor: 'pointer',
+            fontWeight: '900',
+            fontSize: '0.9rem',
+            backgroundColor:
+                activeEmployeeSection === "notifications"
+                    ? '#047857'
+                    : 'transparent',
+            color:
+                activeEmployeeSection === "notifications"
+                    ? '#ffffff'
+                    : '#475569'
+        }}
+    >
+        🔔 Notifications
+        {employeeNotifications.filter(
+            (notification) =>
+                Number(notification.is_read) === 0
+        ).length > 0 && (
+            <span
+                style={{
+                    marginLeft: '7px',
+                    backgroundColor: '#dc2626',
+                    color: '#ffffff',
+                    borderRadius: '999px',
+                    padding: '2px 7px',
+                    fontSize: '0.7rem'
+                }}
+            >
+                {
+                    employeeNotifications.filter(
+                        (notification) =>
+                            Number(notification.is_read) === 0
+                    ).length
+                }
+            </span>
+        )}
     </button>
 
     <button
@@ -2009,6 +2172,161 @@ useEffect(() => {
 
         </div>
 
+        {/* ======================================================
+    EMPLOYEE LEAVE BALANCES
+====================================================== */}
+
+<div
+    style={{
+        marginBottom: '28px'
+    }}
+>
+
+    <div
+        style={{
+            fontSize: '0.75rem',
+            fontWeight: '900',
+            color: '#64748b',
+            textTransform: 'uppercase',
+            letterSpacing: '0.7px',
+            marginBottom: '12px'
+        }}
+    >
+        My Leave Balances
+    </div>
+
+
+    {leaveBalancesLoading ? (
+
+        <div
+            style={{
+                padding: '18px',
+                background: '#f8fafc',
+                borderRadius: '14px',
+                color: '#64748b',
+                fontWeight: '700'
+            }}
+        >
+            Loading leave balances...
+        </div>
+
+    ) : leaveBalances.length > 0 ? (
+
+        <div
+            style={{
+                display: 'grid',
+                gridTemplateColumns:
+                    'repeat(auto-fit, minmax(200px, 1fr))',
+                gap: '14px'
+            }}
+        >
+
+            {leaveBalances.map(
+                (balance) => (
+
+                    <div
+                        key={balance.id}
+                        style={{
+                            padding: '18px',
+                            borderRadius: '16px',
+                            background: '#f8fafc',
+                            border: '1px solid #e2e8f0'
+                        }}
+                    >
+
+                        <div
+                            style={{
+                                color: '#0f172a',
+                                fontWeight: '900',
+                                marginBottom: '14px'
+                            }}
+                        >
+                            {balance.leave_type}
+                        </div>
+
+
+                        <div
+                            style={{
+                                fontSize: '2rem',
+                                fontWeight: '900',
+                                color: '#ea580c'
+                            }}
+                        >
+                            {Number(
+                                balance.remaining_days || 0
+                            ).toFixed(0)}
+                        </div>
+
+
+                        <div
+                            style={{
+                                color: '#64748b',
+                                fontSize: '0.78rem',
+                                fontWeight: '700',
+                                marginBottom: '14px'
+                            }}
+                        >
+                            days remaining
+                        </div>
+
+
+                        <div
+                            style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                gap: '10px',
+                                fontSize: '0.78rem',
+                                color: '#475569'
+                            }}
+                        >
+
+                            <span>
+                                Allocated:{' '}
+                                <strong>
+                                    {Number(
+                                        balance.allocated_days || 0
+                                    ).toFixed(0)}
+                                </strong>
+                            </span>
+
+                            <span>
+                                Used:{' '}
+                                <strong>
+                                    {Number(
+                                        balance.used_days || 0
+                                    ).toFixed(0)}
+                                </strong>
+                            </span>
+
+                        </div>
+
+                    </div>
+
+                )
+            )}
+
+        </div>
+
+    ) : (
+
+        <div
+            style={{
+                padding: '18px',
+                background: '#fff7ed',
+                border: '1px solid #fed7aa',
+                borderRadius: '14px',
+                color: '#c2410c',
+                fontWeight: '700'
+            }}
+        >
+            No leave balance information is available.
+        </div>
+
+    )}
+
+</div>
+
+
 
         <form onSubmit={submitLeaveRequest}>
 
@@ -2053,13 +2371,7 @@ useEffect(() => {
                         Family Responsibility Leave
                     </option>
 
-                    <option value="Unpaid Leave">
-                        Unpaid Leave
-                    </option>
-
-                    <option value="Other">
-                        Other
-                    </option>
+                    
                 </select>
 
             </div>

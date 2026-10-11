@@ -256,6 +256,16 @@ const [
   setWeeklyReportLoading
 ] = useState(false);
 
+const [
+  weeklySignature,
+  setWeeklySignature
+] = useState(null);
+
+const [
+  signingWeeklyReport,
+  setSigningWeeklyReport
+] = useState(false);
+
 // ======================================================
 // MONTHLY ATTENDANCE REPORT STATE
 // ======================================================
@@ -541,7 +551,9 @@ const exportDailyAttendanceCSV = () => {
           record.total_hours || 0
         ).toFixed(2),
 
-        record.status || ''
+        record.sync_status === 'Auto Clock-Out - Left Geofence'
+  ? 'Auto Clock-Out - Left Geofence'
+  : record.status || ''
 
       ]
     );
@@ -612,6 +624,7 @@ const [documentsLoading, setDocumentsLoading] =
 const [documentUploadForm, setDocumentUploadForm] =
   useState({
     document_type: '',
+    expiry_date: '',
     file: null
   });
 
@@ -946,6 +959,8 @@ const fetchDashboardData = async () => {
             config
           );
 
+         
+
 
         setTodayAttendance(
           response.data.attendance || []
@@ -1015,6 +1030,9 @@ const fetchWeeklyAttendance = async () => {
     setWeeklyAttendance(
       response.data.attendance || []
     );
+    setWeeklySignature(
+  response.data.signature || null
+);
 
 
     console.log(
@@ -1033,6 +1051,7 @@ const fetchWeeklyAttendance = async () => {
 
 
     setWeeklyAttendance([]);
+    setWeeklySignature(null);
 
 
     alert(
@@ -1044,6 +1063,115 @@ const fetchWeeklyAttendance = async () => {
   } finally {
 
     setWeeklyReportLoading(false);
+
+  }
+
+};
+// ======================================================
+// DIGITALLY SIGN WEEKLY ATTENDANCE REPORT
+// ======================================================
+
+const signWeeklyAttendanceReport = async () => {
+
+  if (
+    !weeklyStartDate ||
+    !weeklyEndDate
+  ) {
+
+    alert(
+      'Please generate a weekly report before signing.'
+    );
+
+    return;
+  }
+
+
+  if (weeklyAttendance.length === 0) {
+
+    alert(
+      'There are no attendance records to sign.'
+    );
+
+    return;
+  }
+
+
+  const confirmed =
+    window.confirm(
+      `Digitally sign the weekly attendance report from ${weeklyStartDate} to ${weeklyEndDate}?\n\nOnce signed, the system will store the signer, signing time and report fingerprint.`
+    );
+
+
+  if (!confirmed) {
+    return;
+  }
+
+
+  try {
+
+    setSigningWeeklyReport(true);
+
+
+    const response =
+      await axios.post(
+        '/api/management/attendance-weekly/sign',
+        {
+          start:
+            weeklyStartDate,
+
+          end:
+            weeklyEndDate
+        },
+        config
+      );
+
+
+    setWeeklySignature(
+      response.data.signature || null
+    );
+
+
+    alert(
+      response.data.message ||
+      'Weekly attendance report digitally signed successfully.'
+    );
+
+
+    // Reload report so the signature
+    // is verified against the current data
+    await fetchWeeklyAttendance();
+
+
+  } catch (err) {
+
+    console.error(
+      '❌ Weekly report signing error:',
+      err.response?.data ||
+      err.message
+    );
+
+
+    if (
+      err.response?.status === 409 &&
+      err.response?.data?.signature
+    ) {
+
+      setWeeklySignature(
+        err.response.data.signature
+      );
+
+    }
+
+
+    alert(
+      err.response?.data?.message ||
+      'The weekly attendance report could not be signed.'
+    );
+
+
+  } finally {
+
+    setSigningWeeklyReport(false);
 
   }
 
@@ -1495,216 +1623,15 @@ const fetchAbsenteeismReport = async () => {
     setAbsenteeismLoading(true);
 
 
-    const [
-      attendanceResponse,
-      employeesResponse,
-      leaveResponse
-    ] = await Promise.all([
-
-      axios.get(
-        `/api/management/attendance-by-date?date=${absenteeismDate}`,
+    const response =
+      await axios.get(
+        `/api/management/absenteeism?date=${absenteeismDate}`,
         config
-      ),
-
-      axios.get(
-        '/api/management/employees',
-        config
-      ),
-
-      axios.get(
-        '/api/tickets/get-leave-requests',
-        config
-      )
-
-    ]);
-
-
-    const attendanceRecords =
-      attendanceResponse.data.attendance || [];
-
-
-    const employeeRecords =
-      employeesResponse.data.employees || [];
-
-
-    const leaveRecords =
-      leaveResponse.data || [];
-
-      console.log(
-  '🧪 Attendance records:',
-  attendanceRecords
-);
-
-console.log(
-  '🧪 Employee IDs:',
-  employeeRecords.map(
-    (employee) => ({
-      id: employee.id,
-      name: employee.name
-    })
-  )
-);
-
-console.log(
-  '🧪 Attendance employee IDs:',
-  attendanceRecords.map(
-    (record) => ({
-      employee_id:
-        record.employee_id,
-      name:
-        record.name
-    })
-  )
-);
-
-
-    // ----------------------------------------------
-    // ACTIVE EMPLOYEES
-    // ----------------------------------------------
-
-    const activeEmployees =
-      employeeRecords.filter(
-        (employee) => {
-
-          const employmentStatus =
-            String(
-              employee.employment_status ||
-              'Active'
-            ).toLowerCase();
-
-
-          const accountStatus =
-            String(
-              employee.account_status ||
-              'Active'
-            ).toLowerCase();
-
-
-          return (
-            employmentStatus === 'active' &&
-            accountStatus === 'active'
-          );
-
-        }
-      );
-
-
-    // ----------------------------------------------
-    // EMPLOYEES WHO CLOCKED IN
-    // ----------------------------------------------
-
-    const attendedEmployeeIds =
-      new Set(
-        attendanceRecords.map(
-          (record) =>
-            Number(
-              record.employee_id
-            )
-        )
-      );
-
-
-    // ----------------------------------------------
-    // EMPLOYEES ON APPROVED LEAVE
-    // ----------------------------------------------
-
-    const approvedLeaveEmployeeIds =
-      new Set();
-
-
-    leaveRecords.forEach(
-      (leave) => {
-
-        const status =
-          String(
-            leave.status || ''
-          ).toLowerCase();
-
-
-        if (status !== 'approved') {
-          return;
-        }
-
-
-        const startDate =
-          String(
-            leave.start_date || ''
-          ).slice(0, 10);
-
-
-        const endDate =
-          String(
-            leave.end_date || ''
-          ).slice(0, 10);
-
-
-        if (
-          absenteeismDate >= startDate &&
-          absenteeismDate <= endDate
-        ) {
-
-          approvedLeaveEmployeeIds.add(
-            Number(
-              leave.employee_id
-            )
-          );
-
-        }
-
-      }
-    );
-
-
-    // ----------------------------------------------
-    // FIND ABSENT EMPLOYEES
-    // ----------------------------------------------
-
-    const absentEmployees =
-      activeEmployees.filter(
-        (employee) => {
-
-          const employeeId =
-            Number(employee.id);
-
-
-          const attended =
-            attendedEmployeeIds.has(
-              employeeId
-            );
-
-
-          const onApprovedLeave =
-            approvedLeaveEmployeeIds.has(
-              employeeId
-            );
-
-
-          return (
-            !attended &&
-            !onApprovedLeave
-          );
-
-        }
       );
 
 
     const reportData =
-      absentEmployees.map(
-        (employee) => ({
-
-          ...employee,
-
-          absence_date:
-            absenteeismDate,
-
-          absence_status:
-            'Absent',
-
-          reason:
-            'No attendance record'
-
-        })
-      );
+      response.data.absenteeism || [];
 
 
     setAbsenteeismData(
@@ -1712,10 +1639,7 @@ console.log(
     );
 
 
-    console.log(
-      '✅ Absenteeism report loaded:',
-      reportData
-    );
+    
 
 
   } catch (err) {
@@ -1817,7 +1741,9 @@ const exportMonthlyAttendanceCSV = () => {
           record.total_hours || 0
         ).toFixed(2),
 
-        record.status || ''
+        record.sync_status === 'Auto Clock-Out - Left Geofence'
+  ? 'Auto Clock-Out - Left Geofence'
+  : record.status || ''
 
       ]
     );
@@ -1949,7 +1875,9 @@ const exportWeeklyAttendanceCSV = () => {
           record.total_hours || 0
         ).toFixed(2),
 
-        record.status || ''
+       record.sync_status === 'Auto Clock-Out - Left Geofence'
+  ? 'Auto Clock-Out - Left Geofence'
+  : record.status || ''
 
       ]
     );
@@ -2592,17 +2520,20 @@ const uploadEmployeeDocument = async () => {
     await axios.post(
       '/api/documents/upload',
       {
-        employee_id:
-          selectedEmployee.id,
+  employee_id:
+    selectedEmployee.id,
 
-        document_type:
-          documentUploadForm
-            .document_type
-            .trim(),
+  document_type:
+    documentUploadForm
+      .document_type
+      .trim(),
 
-        file_path:
-          fileData
-      },
+  expiry_date:
+    documentUploadForm.expiry_date || null,
+
+  file_path:
+    fileData
+},
       config
     );
 
@@ -2628,9 +2559,10 @@ const uploadEmployeeDocument = async () => {
     // --------------------------------------------------
 
     setDocumentUploadForm({
-      document_type: '',
-      file: null
-    });
+  document_type: '',
+  expiry_date: '',
+  file: null
+});
     if (documentFileInputRef.current) {
   documentFileInputRef.current.value = '';
 }
@@ -2683,6 +2615,74 @@ const uploadEmployeeDocument = async () => {
     );
 
   };
+
+
+  // ======================================================
+// DOCUMENT EXPIRY STATUS
+// ======================================================
+
+const getDocumentExpiryStatus = (expiryDate) => {
+
+  if (!expiryDate) {
+    return {
+      label: 'No Expiry Date',
+      type: 'none'
+    };
+  }
+
+  const dateOnly =
+    String(expiryDate).split('T')[0];
+
+  const expiry =
+    new Date(`${dateOnly}T00:00:00`);
+
+  const today =
+    new Date();
+
+  today.setHours(0, 0, 0, 0);
+
+
+  const differenceInMilliseconds =
+    expiry.getTime() -
+    today.getTime();
+
+
+  const daysRemaining =
+    Math.ceil(
+      differenceInMilliseconds /
+      (1000 * 60 * 60 * 24)
+    );
+
+
+  if (daysRemaining < 0) {
+
+    return {
+      label: 'Expired',
+      type: 'expired',
+      daysRemaining
+    };
+
+  }
+
+
+  if (daysRemaining <= 30) {
+
+    return {
+      label: 'Expiring Soon',
+      type: 'warning',
+      daysRemaining
+    };
+
+  }
+
+
+  return {
+    label: 'Valid',
+    type: 'valid',
+    daysRemaining
+  };
+
+};
 
   // ======================================================
 // DELETE EMPLOYEE DOCUMENT
@@ -4030,6 +4030,107 @@ const deleteEmployeeDocument = async (
                   }
                 </div>
 
+                {/* DOCUMENT EXPIRY STATUS */}
+
+{(() => {
+
+  const expiryStatus =
+    getDocumentExpiryStatus(
+      document.expiry_date
+    );
+
+
+  const badgeStyles = {
+
+    expired: {
+      background: '#fee2e2',
+      border: '1px solid #fecaca',
+      color: '#b91c1c'
+    },
+
+    warning: {
+      background: '#fff7ed',
+      border: '1px solid #fed7aa',
+      color: '#c2410c'
+    },
+
+    valid: {
+      background: '#dcfce7',
+      border: '1px solid #bbf7d0',
+      color: '#15803d'
+    },
+
+    none: {
+      background: '#f1f5f9',
+      border: '1px solid #e2e8f0',
+      color: '#64748b'
+    }
+
+  };
+
+
+  return (
+
+    <div
+      style={{
+        marginTop: '6px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        flexWrap: 'wrap'
+      }}
+    >
+
+      <span
+        style={{
+          padding: '4px 8px',
+          borderRadius: '999px',
+          fontSize: '0.68rem',
+          fontWeight: '900',
+          ...badgeStyles[
+            expiryStatus.type
+          ]
+        }}
+      >
+
+        {
+          expiryStatus.type === 'expired'
+            ? '❌ Expired'
+            : expiryStatus.type === 'warning'
+            ? '⚠️ Expiring Soon'
+            : expiryStatus.type === 'valid'
+            ? '✅ Valid'
+            : 'No Expiry Date'
+        }
+
+      </span>
+
+
+      {document.expiry_date && (
+
+        <span
+          style={{
+            color: '#64748b',
+            fontSize: '0.68rem',
+            fontWeight: '700'
+          }}
+        >
+          Expires:{' '}
+          {
+            String(
+              document.expiry_date
+            ).split('T')[0]
+          }
+        </span>
+
+      )}
+
+    </div>
+
+  );
+
+})()}
+
 
                
 
@@ -5231,7 +5332,17 @@ roles cannot be changed here.
             }}
           >
 
-            ADMIN SESSION ACTIVE ●
+            {
+  isFullManagement
+    ? 'ADMIN SESSION ACTIVE ●'
+    : isSupervisor
+      ? 'SUPERVISOR SESSION ACTIVE ●'
+      : isHRAdmin
+        ? 'HR ADMIN SESSION ACTIVE ●'
+        : isFinance
+          ? 'FINANCE SESSION ACTIVE ●'
+          : 'MANAGEMENT SESSION ACTIVE ●'
+}
 
           </div>
 
@@ -5651,6 +5762,8 @@ roles cannot be changed here.
 >
   Export CSV
 </button>
+
+
 
             </div>
 
@@ -6082,9 +6195,10 @@ roles cannot be changed here.
                             >
 
                               {
-                                record.status ||
-                                'Completed'
-                              }
+  record.sync_status === 'Auto Clock-Out - Left Geofence'
+    ? 'Auto Clock-Out - Left Geofence'
+    : record.status || 'Completed'
+}
 
                             </span>
 
@@ -6385,7 +6499,61 @@ roles cannot be changed here.
 >
   Export CSV
 </button>
+{(isFullManagement || isHRAdmin || isSupervisor) && (
 
+  <button
+    onClick={
+      signWeeklyAttendanceReport
+    }
+    disabled={
+      signingWeeklyReport ||
+      weeklyAttendance.length === 0 ||
+      (
+        weeklySignature &&
+        weeklySignature.status === 'Signed'
+      )
+    }
+    style={{
+      padding: '11px 18px',
+      borderRadius: '12px',
+      border: 'none',
+      background:
+        weeklySignature &&
+        weeklySignature.status === 'Signed'
+          ? '#16a34a'
+          : 'linear-gradient(135deg, #0f766e, #047857)',
+      color: '#ffffff',
+      fontWeight: '900',
+      cursor:
+        signingWeeklyReport ||
+        weeklyAttendance.length === 0 ||
+        (
+          weeklySignature &&
+          weeklySignature.status === 'Signed'
+        )
+          ? 'not-allowed'
+          : 'pointer',
+      opacity:
+        weeklyAttendance.length === 0
+          ? 0.6
+          : 1,
+      boxShadow:
+        '0 6px 14px rgba(15,23,42,0.10)'
+    }}
+  >
+
+    {
+      signingWeeklyReport
+        ? 'Signing...'
+        : weeklySignature &&
+          weeklySignature.status === 'Signed'
+        ? '✅ Digitally Signed'
+        : '✍️ Sign Report'
+    }
+
+  </button>
+
+)}
   </div>
 
 {/* ================================================= */}
@@ -6784,10 +6952,11 @@ roles cannot be changed here.
                   }}
                 >
 
-                  {
-                    record.status ||
-                    'Completed'
-                  }
+       {
+  record.sync_status === 'Auto Clock-Out - Left Geofence'
+    ? 'Auto Clock-Out - Left Geofence'
+    : record.status || 'Completed'
+}
 
                 </span>
 
@@ -7353,9 +7522,10 @@ roles cannot be changed here.
                 >
 
                   {
-                    record.status ||
-                    'Completed'
-                  }
+  record.sync_status === 'Auto Clock-Out - Left Geofence'
+    ? 'Auto Clock-Out - Left Geofence'
+    : record.status || 'Completed'
+}
 
                 </span>
 
