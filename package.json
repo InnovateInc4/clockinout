@@ -33,7 +33,7 @@
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
-    "phase4:apply": "node tools/apply-phase4-completion.js",
+    "phase4:apply": "node tools/apply-phase4-completion-v2.js",
     "phase4:check-backend": "node --check server/server.js",
     "phase4:verify-build": "react-scripts build",
     "phase4:finalize": "npm run phase4:apply && npm run phase4:check-backend && npm run phase4:verify-build"
