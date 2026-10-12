@@ -34,7 +34,9 @@
     "build": "react-scripts build",
     "test": "react-scripts test",
     "test:ci": "react-scripts test --watchAll=false",
-    "check:backend": "node --check server/server.js",
+    "test:phase4-server": "node --test server/phase4Enhancements.test.js",
+    "check:backend": "node --check server/server.js && node --check server/phase4Enhancements.js",
+    "verify:phase4": "npm run check:backend && npm run test:phase4-server && npm run test:ci && npm run build",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {

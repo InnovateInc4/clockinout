@@ -6,6 +6,16 @@ import DateSelector from "./DateSelector";
 import StartTimeMenu from "./StartTimeMenu";
 import axios from "axios";
 import TicketList from "./TicketList";
+import {
+    cacheAuthorizedGeofences,
+    cacheTrustedTimeSnapshot,
+    createOfflineAttendanceEventId,
+    evaluateCachedGeofence,
+    getOfflineAttendanceQueueCount,
+    getTrustedOfflineTimestamp,
+    queueOfflineAttendanceEvent,
+    syncPendingOfflineAttendance
+} from "../utils/offlineAttendance";
 
 const ClockInOut = (props) => {
     const [loaded, setLoaded] = useState(false);
@@ -88,6 +98,58 @@ const outsideGeofenceChecksRef =
 // Prevent more than one automatic clock-out request
 const autoClockOutRunningRef =
     useRef(false);
+
+
+// ======================================================
+// OFFLINE-FIRST ATTENDANCE + TRUSTED TIME
+// ======================================================
+const [offlineQueueCount, setOfflineQueueCount] =
+    useState(() => getOfflineAttendanceQueueCount());
+
+const [browserOnline, setBrowserOnline] =
+    useState(() =>
+        typeof navigator === "undefined"
+            ? true
+            : navigator.onLine
+    );
+
+const [offlineSyncStatus, setOfflineSyncStatus] =
+    useState("Online");
+
+const [faceMatchDistance, setFaceMatchDistance] =
+    useState(null);
+
+
+const cacheLocalClockState = (value) => {
+    try {
+        window.localStorage.setItem(
+            'mcms_last_clock_state_v1',
+            JSON.stringify({
+                clockedIn: Boolean(value),
+                cachedAt: Date.now()
+            })
+        );
+    } catch (_) {
+        // Storage can be unavailable in restricted/private browser modes.
+    }
+};
+
+const readLocalClockState = () => {
+    try {
+        const raw = window.localStorage.getItem(
+            'mcms_last_clock_state_v1'
+        );
+
+        if (!raw) return null;
+
+        const parsed = JSON.parse(raw);
+        return typeof parsed.clockedIn === 'boolean'
+            ? parsed.clockedIn
+            : null;
+    } catch (_) {
+        return null;
+    }
+};
     useEffect(() => {
 
     const loadFaceModels = async () => {
@@ -129,7 +191,7 @@ const autoClockOutRunningRef =
 // ======================================================
 
 const autoClockOutAfterGeofenceExit =
-    async (latitude, longitude) => {
+    async (latitude, longitude, accuracy = userCoords?.accuracy || null) => {
 
         // Prevent duplicate requests
         if (autoClockOutRunningRef.current) {
@@ -137,6 +199,68 @@ const autoClockOutAfterGeofenceExit =
         }
 
         autoClockOutRunningRef.current = true;
+
+        // If connectivity is unavailable, preserve the automatic
+        // geofence-exit event locally and let the server verify it
+        // when the connection returns.
+        if (
+            typeof navigator !== "undefined" &&
+            !navigator.onLine
+        ) {
+
+            const employeeId =
+                sessionStorage.getItem("userId");
+
+            const trustedTime =
+                getTrustedOfflineTimestamp(new Date());
+
+            const queued =
+                queueOfflineAttendanceEvent({
+                    client_event_id:
+                        createOfflineAttendanceEventId(
+                            employeeId || "employee"
+                        ),
+                    event_type:
+                        "auto_clock_out_geofence",
+                    captured_at:
+                        trustedTime.captured_at,
+                    timezone_offset_minutes:
+                        new Date().getTimezoneOffset(),
+                    latitude,
+                    longitude,
+                    accuracy_meters:
+                        Number(accuracy || 0),
+                    face_verified:
+                        false,
+                    face_match_distance:
+                        null,
+                    trusted_time_verified_at:
+                        trustedTime.trusted_time_verified_at,
+                    trusted_time_age_ms:
+                        trustedTime.trusted_time_age_ms
+                });
+
+            setOfflineQueueCount(
+                queued.length
+            );
+
+            setClockedIn(false);
+            cacheLocalClockState(false);
+
+            if (props.setIsClockedIn) {
+                props.setIsClockedIn(false);
+            }
+
+            outsideGeofenceChecksRef.current = 0;
+            autoClockOutRunningRef.current = false;
+
+            props.showAlert(
+                "Offline automatic geofence clock-out queued. It will be server-verified when connectivity returns.",
+                "warning"
+            );
+
+            return;
+        }
 
         try {
 
@@ -187,6 +311,131 @@ const autoClockOutAfterGeofenceExit =
         }
 
     };
+const refreshOfflineSecurityCaches = async () => {
+
+    if (
+        typeof navigator !== "undefined" &&
+        !navigator.onLine
+    ) {
+        return;
+    }
+
+    try {
+        const geofenceResponse =
+            await axios.get(
+                "/api/attendance/geofences",
+                props.config
+            );
+
+        if (geofenceResponse.data?.success) {
+            cacheAuthorizedGeofences(
+                geofenceResponse.data.locations || []
+            );
+        }
+    } catch (error) {
+        console.warn(
+            "⚠️ Could not refresh offline geofence cache:",
+            error.response?.data || error.message
+        );
+    }
+
+    try {
+        const timeResponse =
+            await axios.get(
+                "/api/system/time",
+                props.config
+            );
+
+        if (timeResponse.data?.success) {
+            cacheTrustedTimeSnapshot(
+                timeResponse.data
+            );
+        }
+    } catch (error) {
+        console.warn(
+            "⚠️ Could not refresh trusted-time cache:",
+            error.response?.data || error.message
+        );
+    }
+};
+
+
+const syncOfflineAttendanceQueue = async () => {
+
+    if (
+        typeof navigator !== "undefined" &&
+        !navigator.onLine
+    ) {
+        setOfflineSyncStatus("Offline");
+        setOfflineQueueCount(
+            getOfflineAttendanceQueueCount()
+        );
+        return;
+    }
+
+    const pendingCount =
+        getOfflineAttendanceQueueCount();
+
+    if (pendingCount === 0) {
+        setOfflineQueueCount(0);
+        setOfflineSyncStatus("Online");
+        return;
+    }
+
+    setOfflineSyncStatus("Syncing");
+
+    try {
+        const result =
+            await syncPendingOfflineAttendance(
+                props.config
+            );
+
+        setOfflineQueueCount(
+            result.remaining.length
+        );
+
+        if (result.synced > 0) {
+            props.showAlert(
+                `${result.synced} offline attendance event(s) synchronized successfully.`,
+                "success"
+            );
+        }
+
+        if (result.rejected > 0) {
+            props.showAlert(
+                `${result.rejected} offline attendance event(s) were rejected by server verification and are available in the server audit log.`,
+                "warning"
+            );
+        }
+
+        if (
+            result.synced > 0 ||
+            result.duplicates > 0 ||
+            result.rejected > 0
+        ) {
+            await populateFields();
+        }
+
+        setOfflineSyncStatus(
+            result.remaining.length > 0
+                ? "Pending"
+                : "Online"
+        );
+
+    } catch (error) {
+        console.error(
+            "❌ Offline attendance synchronization error:",
+            error.response?.data || error.message
+        );
+
+        setOfflineQueueCount(
+            getOfflineAttendanceQueueCount()
+        );
+        setOfflineSyncStatus("Pending");
+    }
+};
+
+
 const verifyLocation = () => {
 
     // --------------------------------------------------
@@ -245,7 +494,9 @@ const verifyLocation = () => {
 
                 lat: latitude,
 
-                lng: longitude
+                lng: longitude,
+
+                accuracy: accuracy
 
             });
 
@@ -349,7 +600,8 @@ const verifyLocation = () => {
 
             await autoClockOutAfterGeofenceExit(
                 latitude,
-                longitude
+                longitude,
+                accuracy
             );
 
         }
@@ -371,15 +623,68 @@ const verifyLocation = () => {
                     error.message
                 );
 
+                const networkFailure =
+                    !error.response;
+
+                if (networkFailure) {
+
+                    const cachedResult =
+                        evaluateCachedGeofence(
+                            latitude,
+                            longitude
+                        );
+
+                    if (cachedResult) {
+
+                        setIsInZone(
+                            cachedResult.inZone
+                        );
+
+                        setLocationStatus(
+                            cachedResult.inZone
+                                ? `Offline location cached locally ✅ (${cachedResult.distance}m) - server verification pending`
+                                : `Offline - Outside Allowed Zone ❌ (${cachedResult.distance}m from nearest cached location)`
+                        );
+
+                        if (cachedResult.inZone) {
+                            outsideGeofenceChecksRef.current = 0;
+                        } else if (clockedIn) {
+                            outsideGeofenceChecksRef.current += 1;
+
+                            console.log(
+                                `📴 Offline outside geofence check ${outsideGeofenceChecksRef.current}/3`
+                            );
+
+                            if (
+                                outsideGeofenceChecksRef.current >= 3
+                            ) {
+                                await autoClockOutAfterGeofenceExit(
+                                    latitude,
+                                    longitude,
+                                    accuracy
+                                );
+                            }
+                        } else {
+                            outsideGeofenceChecksRef.current = 0;
+                        }
+
+                        return;
+                    }
+
+                    setIsInZone(false);
+
+                    setLocationStatus(
+                        "Offline: no cached authorised geofence is available. Reconnect once before using offline attendance ❌"
+                    );
+
+                    return;
+                }
 
                 setIsInZone(false);
 
-
                 setLocationStatus(
-
                     error.response?.data?.message ||
                     "Unable to verify work location ❌"
-
                 );
 
             }
@@ -569,6 +874,7 @@ useEffect(() => {
     myHours[0].timeOut === "noTimeYet"
 ) {
     setClockedIn(true);
+    cacheLocalClockState(true);
 
     if (props.setIsClockedIn) {
         props.setIsClockedIn(true);
@@ -576,6 +882,7 @@ useEffect(() => {
 
 } else {
     setClockedIn(false);
+    cacheLocalClockState(false);
 
     if (props.setIsClockedIn) {
         props.setIsClockedIn(false);
@@ -598,6 +905,25 @@ useEffect(() => {
             "❌ Error loading attendance history:",
             err.response?.data || err.message
         );
+
+        if (!err.response) {
+            const cachedClockState =
+                readLocalClockState();
+
+            if (cachedClockState !== null) {
+                setClockedIn(cachedClockState);
+
+                if (props.setIsClockedIn) {
+                    props.setIsClockedIn(cachedClockState);
+                }
+
+                console.log(
+                    '📴 Using cached duty state while attendance history is offline.'
+                );
+
+                return;
+            }
+        }
 
         resetData();
     }
@@ -1122,6 +1448,7 @@ const loadEmployeeLeaveBalances = async () => {
 
             setIsScanning(false);
             setFaceVerified(false);
+            setFaceMatchDistance(null);
             setFaceStatus("Face does not match registered profile");
 
             props.showAlert(
@@ -1147,6 +1474,9 @@ const loadEmployeeLeaveBalances = async () => {
         );
 
         setFaceVerified(true);
+        setFaceMatchDistance(
+            distance
+        );
         setFaceStatus("Identity verified");
         setIsScanning(false);
 
@@ -1168,6 +1498,7 @@ const loadEmployeeLeaveBalances = async () => {
 
         setIsScanning(false);
         setFaceVerified(false);
+        setFaceMatchDistance(null);
         setFaceStatus(
     err.message || "Face verification failed"
 );
@@ -1268,6 +1599,123 @@ const loadEmployeeLeaveBalances = async () => {
 
     const latitude = userCoords?.lat || null;
     const longitude = userCoords?.lng || null;
+    const accuracy = userCoords?.accuracy || null;
+
+
+    if (
+        latitude === null ||
+        longitude === null
+    ) {
+        props.showAlert(
+            "A valid GPS position is required for attendance.",
+            "danger"
+        );
+        return;
+    }
+
+
+    // ==================================================
+    // OFFLINE ATTENDANCE CAPTURE
+    // ==================================================
+    // Only enter offline mode when the browser explicitly reports
+    // that connectivity is unavailable. This avoids creating a
+    // duplicate if an online request merely times out after the
+    // server has already accepted it.
+    if (
+        typeof navigator !== "undefined" &&
+        !navigator.onLine
+    ) {
+
+        const cachedGeofence =
+            evaluateCachedGeofence(
+                latitude,
+                longitude
+            );
+
+        if (
+            !cachedGeofence ||
+            !cachedGeofence.inZone
+        ) {
+            props.showAlert(
+                "Offline attendance is blocked because the cached authorised geofence cannot verify this location.",
+                "danger"
+            );
+            return;
+        }
+
+        if (!faceVerified) {
+            props.showAlert(
+                "Complete face verification before recording offline attendance.",
+                "warning"
+            );
+            return;
+        }
+
+        const trustedTime =
+            getTrustedOfflineTimestamp(
+                selectedTime || new Date()
+            );
+
+        const queued =
+            queueOfflineAttendanceEvent({
+                client_event_id:
+                    createOfflineAttendanceEventId(
+                        employeeId
+                    ),
+                event_type:
+                    type === "in"
+                        ? "clock_in"
+                        : "clock_out",
+                captured_at:
+                    trustedTime.captured_at,
+                timezone_offset_minutes:
+                    new Date().getTimezoneOffset(),
+                latitude,
+                longitude,
+                accuracy_meters:
+                    Number(accuracy || 0),
+                face_verified:
+                    true,
+                face_match_distance:
+                    faceMatchDistance,
+                trusted_time_verified_at:
+                    trustedTime.trusted_time_verified_at,
+                trusted_time_age_ms:
+                    trustedTime.trusted_time_age_ms
+            });
+
+        setOfflineQueueCount(
+            queued.length
+        );
+        setOfflineSyncStatus("Pending");
+
+        const nextClockedIn =
+            type === "in";
+
+        setClockedIn(
+            nextClockedIn
+        );
+        cacheLocalClockState(
+            nextClockedIn
+        );
+
+        if (props.setIsClockedIn) {
+            props.setIsClockedIn(
+                nextClockedIn
+            );
+        }
+
+        setFaceVerified(false);
+        setFaceMatchDistance(null);
+        setCapturedPhoto(null);
+
+        props.showAlert(
+            `Offline attendance event queued securely (${queued.length} pending). It will be re-verified and synchronized automatically when connectivity returns.`,
+            "warning"
+        );
+
+        return;
+    }
 
     try {
 
@@ -1296,6 +1744,7 @@ const loadEmployeeLeaveBalances = async () => {
             }
 
             setClockedIn(true);
+            cacheLocalClockState(true);
 
             props.showAlert(
                 "Clocked In Successfully!",
@@ -1329,6 +1778,7 @@ const loadEmployeeLeaveBalances = async () => {
             }
 
             setClockedIn(false);
+            cacheLocalClockState(false);
 
 if (props.setIsClockedIn) {
     props.setIsClockedIn(false);
@@ -1348,6 +1798,7 @@ setTaskDescription("");
         // --------------------------------------------------
 
         setFaceVerified(false);
+        setFaceMatchDistance(null);
         setCapturedPhoto(null);
 
         // --------------------------------------------------
@@ -1413,6 +1864,63 @@ setTaskDescription("");
 
     }
 };
+
+    useEffect(() => {
+
+    const handleBrowserOnline = async () => {
+        setBrowserOnline(true);
+        setOfflineSyncStatus("Online");
+
+        await refreshOfflineSecurityCaches();
+        await syncOfflineAttendanceQueue();
+    };
+
+    const handleBrowserOffline = () => {
+        setBrowserOnline(false);
+        setOfflineSyncStatus("Offline");
+        setOfflineQueueCount(
+            getOfflineAttendanceQueueCount()
+        );
+    };
+
+    setOfflineQueueCount(
+        getOfflineAttendanceQueueCount()
+    );
+
+    if (
+        typeof navigator === "undefined" ||
+        navigator.onLine
+    ) {
+        handleBrowserOnline();
+    } else {
+        handleBrowserOffline();
+    }
+
+    window.addEventListener(
+        "online",
+        handleBrowserOnline
+    );
+
+    window.addEventListener(
+        "offline",
+        handleBrowserOffline
+    );
+
+    return () => {
+        window.removeEventListener(
+            "online",
+            handleBrowserOnline
+        );
+        window.removeEventListener(
+            "offline",
+            handleBrowserOffline
+        );
+    };
+
+// Intentionally installed once for connectivity lifecycle handling.
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
 
     useEffect(() => {
     if (!loaded) {
@@ -2884,6 +3392,44 @@ useEffect(() => {
     )}
   </div>
 )}
+
+    {/* ======================================================
+        OFFLINE ATTENDANCE STATUS
+    ====================================================== */}
+    {(!browserOnline || offlineQueueCount > 0 || offlineSyncStatus === "Syncing") && (
+        <div
+            className="glass-card"
+            style={{
+                background: browserOnline
+                    ? 'rgba(255,247,237,0.94)'
+                    : 'rgba(254,249,195,0.94)',
+                backdropFilter: 'blur(12px)',
+                borderRadius: '16px',
+                padding: '16px 18px',
+                marginBottom: '16px',
+                border: browserOnline
+                    ? '1px solid #fed7aa'
+                    : '1px solid #fde68a',
+                color: '#7c2d12',
+                fontSize: '0.86rem',
+                fontWeight: '700'
+            }}
+        >
+            <div style={{ fontWeight: '900', marginBottom: '4px' }}>
+                {browserOnline
+                    ? offlineSyncStatus === "Syncing"
+                        ? '🔄 Synchronising Offline Attendance'
+                        : '📤 Offline Attendance Pending Sync'
+                    : '📴 Offline Attendance Mode'}
+            </div>
+
+            <div>
+                {browserOnline
+                    ? `${offlineQueueCount} attendance event(s) are waiting for server verification.`
+                    : `Attendance can be securely queued using the cached 50 metre geofence, face verification and last trusted server-time reference. Pending events: ${offlineQueueCount}.`}
+            </div>
+        </div>
+    )}
 
     {/* GPS VERIFICATION BAR */}
                 
