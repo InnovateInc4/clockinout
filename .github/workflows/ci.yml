@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - phase4-final-completion
+      - phase4-complete-offline-time-leave
   pull_request:
     branches:
       - main
@@ -29,7 +29,10 @@ jobs:
       - name: Check backend syntax
         run: npm run check:backend
 
-      - name: Run frontend smoke test
+      - name: Test Phase 4 server helpers
+        run: npm run test:phase4-server
+
+      - name: Run frontend tests
         env:
           CI: 'true'
         run: npm run test:ci
