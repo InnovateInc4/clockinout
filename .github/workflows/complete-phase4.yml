@@ -19,6 +19,9 @@ jobs:
           ref: phase4-complete-offline-time-leave
           fetch-depth: 0
 
+      - name: Prepare guarded patcher
+        run: python3 tools/fix-phase4-patcher.py
+
       - name: Apply guarded completion patch
         run: python3 tools/apply-phase4-complete.py
 
