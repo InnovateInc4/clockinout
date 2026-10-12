@@ -1,3 +1,10 @@
+jest.mock('axios', () => ({
+  __esModule: true,
+  default: {
+    post: jest.fn()
+  }
+}));
+
 import {
   cacheAuthorizedGeofences,
   clearOfflineAttendanceStorageForTests,
