@@ -4,13 +4,14 @@ on:
   push:
     branches:
       - phase4-final-completion
+    paths:
+      - '.github/workflows/final-hardening.yml'
 
 permissions:
   contents: write
 
 jobs:
   harden:
-    if: "!contains(github.event.head_commit.message, '[final-hardening]')"
     runs-on: ubuntu-latest
 
     steps:
@@ -60,7 +61,6 @@ if (String(password).length < 8) {
           login_replacement = """// --------------------------------------------------
 // PASSWORD IS VERIFIED AGAINST THIS USER'S STORED HASH
 // --------------------------------------------------
-// Do not use a repository-wide shared password gate here.
 // The bcrypt / legacy-password verification below is the
 // authoritative credential check for the selected account.
 """
@@ -182,9 +182,5 @@ if (String(password).length < 8) {
           git config user.name "phase4-finalizer"
           git config user.email "phase4-finalizer@users.noreply.github.com"
           git add server/server.js
-          if git diff --cached --quiet; then
-            echo "No server changes to commit."
-            exit 0
-          fi
-          git commit -m "[final-hardening] Secure authentication flow and prevent duplicate leave notifications"
+          git commit -m "Secure authentication flow and prevent duplicate leave notifications"
           git push origin HEAD:phase4-final-completion
