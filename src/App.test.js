@@ -1,6 +1,18 @@
 import { render, screen } from '@testing-library/react';
 import LoginAdmin from './components/LoginAdmin';
 
+jest.mock('axios', () => ({
+  post: jest.fn(),
+  get: jest.fn(),
+  put: jest.fn(),
+  interceptors: {
+    response: {
+      use: jest.fn(),
+      eject: jest.fn()
+    }
+  }
+}));
+
 test('renders the secure staff login screen', () => {
   render(<LoginAdmin />);
 
