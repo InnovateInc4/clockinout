@@ -118,6 +118,38 @@ const [offlineSyncStatus, setOfflineSyncStatus] =
 
 const [faceMatchDistance, setFaceMatchDistance] =
     useState(null);
+
+
+const cacheLocalClockState = (value) => {
+    try {
+        window.localStorage.setItem(
+            'mcms_last_clock_state_v1',
+            JSON.stringify({
+                clockedIn: Boolean(value),
+                cachedAt: Date.now()
+            })
+        );
+    } catch (_) {
+        // Storage can be unavailable in restricted/private browser modes.
+    }
+};
+
+const readLocalClockState = () => {
+    try {
+        const raw = window.localStorage.getItem(
+            'mcms_last_clock_state_v1'
+        );
+
+        if (!raw) return null;
+
+        const parsed = JSON.parse(raw);
+        return typeof parsed.clockedIn === 'boolean'
+            ? parsed.clockedIn
+            : null;
+    } catch (_) {
+        return null;
+    }
+};
     useEffect(() => {
 
     const loadFaceModels = async () => {
@@ -213,6 +245,7 @@ const autoClockOutAfterGeofenceExit =
             );
 
             setClockedIn(false);
+            cacheLocalClockState(false);
 
             if (props.setIsClockedIn) {
                 props.setIsClockedIn(false);
@@ -613,6 +646,28 @@ const verifyLocation = () => {
                                 : `Offline - Outside Allowed Zone ❌ (${cachedResult.distance}m from nearest cached location)`
                         );
 
+                        if (cachedResult.inZone) {
+                            outsideGeofenceChecksRef.current = 0;
+                        } else if (clockedIn) {
+                            outsideGeofenceChecksRef.current += 1;
+
+                            console.log(
+                                `📴 Offline outside geofence check ${outsideGeofenceChecksRef.current}/3`
+                            );
+
+                            if (
+                                outsideGeofenceChecksRef.current >= 3
+                            ) {
+                                await autoClockOutAfterGeofenceExit(
+                                    latitude,
+                                    longitude,
+                                    accuracy
+                                );
+                            }
+                        } else {
+                            outsideGeofenceChecksRef.current = 0;
+                        }
+
                         return;
                     }
 
@@ -819,6 +874,7 @@ useEffect(() => {
     myHours[0].timeOut === "noTimeYet"
 ) {
     setClockedIn(true);
+    cacheLocalClockState(true);
 
     if (props.setIsClockedIn) {
         props.setIsClockedIn(true);
@@ -826,6 +882,7 @@ useEffect(() => {
 
 } else {
     setClockedIn(false);
+    cacheLocalClockState(false);
 
     if (props.setIsClockedIn) {
         props.setIsClockedIn(false);
@@ -848,6 +905,25 @@ useEffect(() => {
             "❌ Error loading attendance history:",
             err.response?.data || err.message
         );
+
+        if (!err.response) {
+            const cachedClockState =
+                readLocalClockState();
+
+            if (cachedClockState !== null) {
+                setClockedIn(cachedClockState);
+
+                if (props.setIsClockedIn) {
+                    props.setIsClockedIn(cachedClockState);
+                }
+
+                console.log(
+                    '📴 Using cached duty state while attendance history is offline.'
+                );
+
+                return;
+            }
+        }
 
         resetData();
     }
@@ -1422,6 +1498,7 @@ const loadEmployeeLeaveBalances = async () => {
 
         setIsScanning(false);
         setFaceVerified(false);
+        setFaceMatchDistance(null);
         setFaceStatus(
     err.message || "Face verification failed"
 );
@@ -1618,6 +1695,9 @@ const loadEmployeeLeaveBalances = async () => {
         setClockedIn(
             nextClockedIn
         );
+        cacheLocalClockState(
+            nextClockedIn
+        );
 
         if (props.setIsClockedIn) {
             props.setIsClockedIn(
@@ -1664,6 +1744,7 @@ const loadEmployeeLeaveBalances = async () => {
             }
 
             setClockedIn(true);
+            cacheLocalClockState(true);
 
             props.showAlert(
                 "Clocked In Successfully!",
@@ -1697,6 +1778,7 @@ const loadEmployeeLeaveBalances = async () => {
             }
 
             setClockedIn(false);
+            cacheLocalClockState(false);
 
 if (props.setIsClockedIn) {
     props.setIsClockedIn(false);
