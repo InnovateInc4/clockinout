@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   harden:
-    if: ${{ !contains(github.event.head_commit.message, '[final-hardening]') }}
+    if: "!contains(github.event.head_commit.message, '[final-hardening]')"
     runs-on: ubuntu-latest
 
     steps:
