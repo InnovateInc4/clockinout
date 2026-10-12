@@ -1,0 +1,55 @@
+name: Final offline continuity polish
+
+on:
+  push:
+    branches:
+      - phase4-complete-offline-time-leave
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: phase4-complete-offline-time-leave
+          fetch-depth: 0
+
+      - name: Apply offline continuity polish
+        run: python3 tools/post-phase4-polish.py
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check backend syntax
+        run: npm run check:backend
+
+      - name: Test Phase 4 server helpers
+        run: npm run test:phase4-server
+
+      - name: Run frontend tests
+        env:
+          CI: 'true'
+        run: npm run test:ci
+
+      - name: Build production frontend
+        env:
+          CI: 'false'
+        run: npm run build
+
+      - name: Commit validated polish
+        shell: bash
+        run: |
+          git config user.name "phase4-finalizer"
+          git config user.email "phase4-finalizer@users.noreply.github.com"
+          git add src/components/ClockInOut.js
+          if git diff --cached --quiet; then
+            echo "No post-polish source changes to commit."
+            exit 0
+          fi
+          git commit -m "[post-polish] Preserve offline duty state and geofence exit monitoring"
+          git push origin HEAD:phase4-complete-offline-time-leave
