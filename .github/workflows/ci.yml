@@ -1,0 +1,40 @@
+name: MCMS CI
+
+on:
+  push:
+    branches:
+      - main
+      - phase4-final-completion
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check backend syntax
+        run: npm run check:backend
+
+      - name: Run frontend smoke test
+        env:
+          CI: 'true'
+        run: npm run test:ci
+
+      - name: Build production frontend
+        env:
+          CI: 'false'
+        run: npm run build
