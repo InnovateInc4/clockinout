@@ -1,70 +1,68 @@
-# Getting Started with Create React App
+# Municipal Clock-In/Out Management System (MCMS)
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+A municipal/provincial employee attendance and workforce management prototype built with React, Node.js/Express and MySQL.
 
-## Available Scripts
+## Core features
 
-In the project directory, you can run:
+- JWT authentication with role-based access control.
+- Worker, Supervisor, HR Admin, Finance, Admin and legacy Manager access separation.
+- Employee attendance clock-in/clock-out.
+- Server-side 50 metre geofence verification.
+- Face-profile verification before attendance actions.
+- Automatic clock-out after repeated verified geofence exits.
+- Automatic stale-shift closure for review.
+- Daily, weekly, monthly, hours-worked and absenteeism reporting.
+- CSV attendance exports.
+- Leave application, approval/denial workflow and the 30% workforce conflict rule.
+- Employee leave balances.
+- Employee document/certification records with expiry warnings.
+- Audit logs.
+- Weekly attendance SHA-256 digital report signatures.
+- Employee leave-decision notifications with persistent read/unread state.
+- Authoritative server/database time endpoint for verification.
 
-### `npm start`
+## Technology stack
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+- Frontend: React 19 / Create React App
+- Backend: Node.js + Express
+- Database: MySQL (`mysql2/promise`)
+- Authentication: JSON Web Tokens + bcrypt
+- Face verification: `@vladmandic/face-api`
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## Local setup
 
-### `npm test`
+1. Install Node.js and MySQL.
+2. Clone this repository.
+3. Run `npm install` in the repository root.
+4. Create a local `.env` file using `.env.example` as a guide.
+5. Ensure the `municipal_db` database exists and contains the project schema.
+6. Start the backend with `npm run server`.
+7. In a second terminal start the React frontend with `npm start`.
+8. Open `http://localhost:3000`.
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+Environment files are ignored by Git and must never be committed.
 
-### `npm run build`
+## Useful commands
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+```bash
+npm start
+npm run server
+npm run check:backend
+npm run test:ci
+npm run build
+```
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+## Database support files
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+- `database/phase4_supporting_tables.sql` documents the additional Phase 4 support tables.
+- `database/phase4_verification.sql` contains read-only verification queries.
 
-### `npm run eject`
+A database dump containing real employee information should not be committed to a public repository. Keep assessment backups separately and securely.
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+## Final Phase 4 status
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+The final branch includes the tested Phase 4 notification, digital-signature, geofence, leave-balance, reporting, RBAC and reliability work. See `PHASE4_COMPLETION.md` and `FINAL_AUDIT.md` for the verification record and known limitations.
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+## Important assessment note
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+The current implementation is React + Node/Express + MySQL. If the assessment specification requires Java as the prescribed implementation language, this must be disclosed accurately in the final report/presentation rather than describing the Node backend as Java.
