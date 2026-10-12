@@ -5,6 +5,19 @@ const db = require('./db');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
+const {
+  countSouthAfricanWorkingDays,
+  getCalendarLeaveCycle,
+  ensurePhase4Infrastructure,
+  ensureCurrentLeaveBalances,
+  ensureAllCurrentLeaveBalances,
+  recalculateCurrentLeaveBalance,
+  createTrustedTimeService,
+  registerPhase4EnhancementRoutes
+} = require('./phase4Enhancements');
+
+const trustedTimeService =
+  createTrustedTimeService(db);
 
 const JWT_SECRET =
   process.env.JWT_SECRET;
@@ -102,17 +115,15 @@ if (
 
 
 // --------------------------------------------------
-// REQUIRE OFFICIAL REGISTRATION PASSWORD
+// REQUIRE A REASONABLY STRONG EMPLOYEE PASSWORD
 // --------------------------------------------------
 
-if (
-  String(password) !== 'Office@premier2026'
-) {
+if (String(password).length < 8) {
 
   return res.status(400).json({
     success: 0,
     message:
-      'The registration password is incorrect.'
+      'Password must be at least 8 characters long.'
   });
 
 }
@@ -210,6 +221,13 @@ if (
       );
 
 
+    // Automatically initialise leave balances for the new employee.
+    await ensureCurrentLeaveBalances(
+      db,
+      result.insertId
+    );
+
+
     console.log(
       `✅ Employee registered securely: ${cleanEmail} | ID: ${result.insertId}`
     );
@@ -297,19 +315,9 @@ if (
 
 
 // --------------------------------------------------
-// REQUIRE OFFICIAL PASSWORD
+// PASSWORD IS VERIFIED AGAINST THIS ACCOUNT BELOW
 // --------------------------------------------------
-
-if (
-  String(password) !== 'Office@premier2026'
-) {
-
-  return res.status(401).json({
-    success: 0,
-    message: 'Invalid email or password.'
-  });
-
-}
+// No shared repository-wide password gate is used.
 
     // --------------------------------------------------
     // Find user
@@ -2476,202 +2484,31 @@ app.get(
 // LEAVE BALANCE HELPERS
 // ======================================================
 
-// Count Monday-Friday only.
-// Weekends do not reduce leave balance.
-const countWorkingLeaveDays = (
-  startValue,
-  endValue
-) => {
-
-  if (!startValue || !endValue) {
-    return 0;
-  }
+// South African working-day calculation automatically excludes
+// weekends, fixed public holidays, Good Friday, Family Day and
+// observed Mondays when a public holiday falls on a Sunday.
+const countWorkingLeaveDays =
+  countSouthAfricanWorkingDays;
 
 
-  const startDate =
-    new Date(startValue);
-
-  const endDate =
-    new Date(endValue);
-
-
-  startDate.setHours(
-    0,
-    0,
-    0,
-    0
-  );
-
-  endDate.setHours(
-    0,
-    0,
-    0,
-    0
-  );
-
-
-  if (
-    Number.isNaN(startDate.getTime()) ||
-    Number.isNaN(endDate.getTime()) ||
-    startDate > endDate
-  ) {
-
-    return 0;
-
-  }
-
-
-  let workingDays = 0;
-
-  const currentDate =
-    new Date(startDate);
-
-
-  while (
-    currentDate <= endDate
-  ) {
-
-    const dayOfWeek =
-      currentDate.getDay();
-
-
-    // Sunday = 0
-    // Saturday = 6
-    if (
-      dayOfWeek !== 0 &&
-      dayOfWeek !== 6
-    ) {
-
-      workingDays += 1;
-
-    }
-
-
-    currentDate.setDate(
-      currentDate.getDate() + 1
-    );
-
-  }
-
-
-  return workingDays;
-
-};
-
-
-// Recalculate one employee's balance from
-// all currently approved leave requests.
+// Recalculate only the leave cycle containing referenceValue.
 const recalculateLeaveBalance =
   async (
     employeeId,
-    leaveType
+    leaveType,
+    referenceValue = new Date()
   ) => {
 
-    const [balanceRows] =
-      await db.query(
-        `
-        SELECT
-          id,
-          allocated_days
-        FROM leave_balances
-        WHERE employee_id = ?
-          AND leave_type = ?
-        LIMIT 1
-        `,
-        [
-          employeeId,
-          leaveType
-        ]
-      );
-
-
-    if (
-      balanceRows.length === 0
-    ) {
-
-      return null;
-
-    }
-
-
-    const allocatedDays =
-      Number(
-        balanceRows[0].allocated_days || 0
-      );
-
-
-    const [approvedRows] =
-      await db.query(
-        `
-        SELECT
-          start_date,
-          end_date
-        FROM leave_requests
-        WHERE employee_id = ?
-          AND type = ?
-          AND LOWER(status) = 'approved'
-        `,
-        [
-          employeeId,
-          leaveType
-        ]
-      );
-
-
-    let usedDays = 0;
-
-
-    approvedRows.forEach(
-      (leave) => {
-
-        usedDays +=
-          countWorkingLeaveDays(
-            leave.start_date,
-            leave.end_date
-          );
-
-      }
+    return recalculateCurrentLeaveBalance(
+      db,
+      employeeId,
+      leaveType,
+      referenceValue
     );
-
-
-    const remainingDays =
-      Math.max(
-        allocatedDays -
-        usedDays,
-        0
-      );
-
-
-    await db.query(
-      `
-      UPDATE leave_balances
-      SET
-        used_days = ?,
-        remaining_days = ?
-      WHERE employee_id = ?
-        AND leave_type = ?
-      `,
-      [
-        usedDays,
-        remainingDays,
-        employeeId,
-        leaveType
-      ]
-    );
-
-
-    return {
-      allocated_days:
-        allocatedDays,
-
-      used_days:
-        usedDays,
-
-      remaining_days:
-        remainingDays
-    };
 
   };
+
+
 
   // ======================================================
 // EMPLOYEE - VIEW OWN LEAVE BALANCES
@@ -2686,6 +2523,27 @@ app.get(
 
       const employeeId =
         req.user.userId;
+
+
+      // Keep the employee on the current automatic leave cycle.
+      await ensureCurrentLeaveBalances(
+        db,
+        employeeId
+      );
+
+
+      // Recalculate each policy so approved leave and public
+      // holidays are reflected before balances are displayed.
+      for (const leaveType of [
+        'Annual Leave',
+        'Sick Leave',
+        'Family Responsibility Leave'
+      ]) {
+        await recalculateLeaveBalance(
+          employeeId,
+          leaveType
+        );
+      }
 
 
       const [rows] =
@@ -2872,6 +2730,40 @@ app.put(
 
       const leaveRequest =
         leaveRows[0];
+
+
+      const requestStartCycle =
+        getCalendarLeaveCycle(
+          leaveRequest.start_date
+        );
+
+      const requestEndCycle =
+        getCalendarLeaveCycle(
+          leaveRequest.end_date
+        );
+
+
+      if (
+        requestStartCycle.year !==
+        requestEndCycle.year
+      ) {
+
+        return res.status(400).json({
+          success: 0,
+          message:
+            'Leave requests that cross two calendar leave cycles must be submitted as separate requests.'
+        });
+
+      }
+
+
+      // Create or roll over the correct cycle before any
+      // balance validation is performed.
+      await ensureCurrentLeaveBalances(
+        db,
+        leaveRequest.employee_id,
+        leaveRequest.start_date
+      );
 
 
       // --------------------------------------------------
@@ -3290,6 +3182,14 @@ app.put(
           : 'Denied';
 
 
+
+      const leaveStatusChanged =
+        String(leaveRequest.status || '')
+          .trim()
+          .toLowerCase() !==
+        finalStatus.toLowerCase();
+
+
       await db.query(
         `
         UPDATE leave_requests
@@ -3309,7 +3209,8 @@ app.put(
 const updatedLeaveBalance =
   await recalculateLeaveBalance(
     leaveRequest.employee_id,
-    leaveRequest.type
+    leaveRequest.type,
+    leaveRequest.start_date
   );
 
 
@@ -3344,33 +3245,37 @@ const notificationMessage =
     : `Your ${leaveType} request has been denied.`;
 
 
-try {
+if (leaveStatusChanged) {
 
-  await db.query(
-    `
-    INSERT INTO notifications (
-      user_id,
-      notification_type,
-      title,
-      message,
-      is_read
-    )
-    VALUES (?, ?, ?, ?, 0)
-    `,
-    [
-      leaveRequest.employee_id,
-      'leave',
-      notificationTitle,
-      notificationMessage
-    ]
-  );
+  try {
 
-} catch (notificationError) {
+    await db.query(
+      `
+      INSERT INTO notifications (
+        user_id,
+        notification_type,
+        title,
+        message,
+        is_read
+      )
+      VALUES (?, ?, ?, ?, 0)
+      `,
+      [
+        leaveRequest.employee_id,
+        'leave',
+        notificationTitle,
+        notificationMessage
+      ]
+    );
 
-  console.error(
-    '❌ Leave notification error:',
-    notificationError
-  );
+  } catch (notificationError) {
+
+    console.error(
+      '❌ Leave notification error:',
+      notificationError
+    );
+
+  }
 
 }
 
@@ -4366,6 +4271,22 @@ const evaluateGeofence = (
 
   };
 };
+
+// ======================================================
+// PHASE 4 - OFFLINE SYNC, PUBLIC HOLIDAYS AND TRUSTED TIME
+// ======================================================
+registerPhase4EnhancementRoutes({
+  app,
+  db,
+  requireAuth,
+  evaluateGeofence,
+  authorizedLocations:
+    AUTHORIZED_WORK_LOCATIONS,
+  writeAuditLog,
+  trustedTimeService
+});
+
+
   // ======================================================
 // ATTENDANCE - CHECK CURRENT LOCATION
 // ======================================================
@@ -6739,30 +6660,7 @@ app.post(
   }
 );
 
-// ======================================================
-// SYSTEM - AUTHORITATIVE DATABASE TIME
-// ======================================================
-
-app.get(
-  '/api/system/time',
-  requireAuth,
-  async (req, res) => {
-    try {
-      const [rows] = await db.query('SELECT NOW(3) AS server_time');
-      return res.status(200).json({
-        success: 1,
-        server_time: rows[0].server_time,
-        source: 'MySQL server time'
-      });
-    } catch (err) {
-      console.error('❌ Server time error:', err);
-      return res.status(500).json({
-        success: 0,
-        message: 'Unable to retrieve authoritative server time.'
-      });
-    }
-  }
-);
+// Trusted time endpoint is registered by phase4Enhancements.js.
 
 // ======================================================
 // START SERVER
@@ -6773,6 +6671,21 @@ app.listen(PORT, async () => {
   console.log(
     `🚀 Server running on port ${PORT}`
   );
+
+  // Ensure final Phase 4 support tables exist before accepting work.
+  await ensurePhase4Infrastructure(db);
+
+  const leaveBalancesInitialised =
+    await ensureAllCurrentLeaveBalances(db);
+
+  console.log(
+    `✅ Phase 4 support tables are ready. Leave balances checked for ${leaveBalancesInitialised} active employee(s).`
+  );
+
+  // Start periodic external NTP verification. Attendance timestamps
+  // remain MySQL-authoritative if the NTP server is temporarily unavailable.
+  trustedTimeService.start();
+
 
   // Check once immediately when server starts
   await closeStaleAttendanceShifts();
