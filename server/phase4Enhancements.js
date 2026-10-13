@@ -1007,7 +1007,8 @@ const registerPhase4EnhancementRoutes = ({
 
         const geofence = evaluateGeofence(
           event.latitude,
-          event.longitude
+          event.longitude,
+          event.accuracyMeters
         );
 
         const isAutomaticExit = event.eventType === 'auto_clock_out_geofence';
