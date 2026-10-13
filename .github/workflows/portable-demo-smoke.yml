@@ -1,0 +1,68 @@
+name: Portable Demo Smoke Test
+
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile.backend'
+      - 'Dockerfile.frontend'
+      - 'docker/**'
+      - 'docker-compose.yml'
+      - 'database/demo_init.sql'
+      - 'server/**'
+      - 'src/**'
+      - 'public/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/portable-demo-smoke.yml'
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build and start portable demo
+        run: docker compose up --build -d
+
+      - name: Wait for full-stack login through frontend proxy
+        shell: bash
+        run: |
+          set -e
+          for i in {1..60}; do
+            RESPONSE=$(curl -sS -X POST \
+              -H 'Content-Type: application/json' \
+              -d '{"email":"admin.demo@ncpg.gov.za","password":"Demo1234!"}' \
+              http://localhost:3000/api/auth/login-admin || true)
+
+            if echo "$RESPONSE" | grep -q '"success":1'; then
+              echo 'Portable demo login succeeded.'
+              exit 0
+            fi
+
+            echo "Waiting for stack... attempt $i"
+            sleep 3
+          done
+
+          echo 'Portable demo did not become ready.'
+          docker compose ps
+          docker compose logs --no-color
+          exit 1
+
+      - name: Check frontend page
+        run: curl --fail --silent --show-error http://localhost:3000/ > /dev/null
+
+      - name: Show container status
+        if: always()
+        run: docker compose ps
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Stop portable demo
+        if: always()
+        run: docker compose down -v
