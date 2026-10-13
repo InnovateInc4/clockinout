@@ -271,7 +271,9 @@ const autoClockOutAfterGeofenceExit =
 
                     {
                         latitude,
-                        longitude
+                        longitude,
+                        accuracy_meters:
+                            Number(accuracy || 0)
                     },
 
                     props.config
@@ -436,300 +438,258 @@ const syncOfflineAttendanceQueue = async () => {
 };
 
 
-const verifyLocation = () => {
+const getBestCurrentPosition = () => {
 
-    // --------------------------------------------------
-    // CHECK BROWSER GPS SUPPORT
-    // --------------------------------------------------
+    return new Promise((resolve, reject) => {
 
-    if (!navigator.geolocation) {
+        if (!navigator.geolocation) {
+            reject(new Error("GPS is not supported on this device."));
+            return;
+        }
 
-        setIsInZone(false);
+        let bestPosition = null;
+        let lastError = null;
+        let watchId = null;
+        let timer = null;
+        let finished = false;
 
-        setUserCoords(null);
+        const cleanup = () => {
+            if (watchId !== null) {
+                navigator.geolocation.clearWatch(watchId);
+            }
+            if (timer !== null) {
+                clearTimeout(timer);
+            }
+        };
 
-        setLocationStatus(
-            "GPS is not supported on this device ❌"
+        const finish = () => {
+            if (finished) return;
+            finished = true;
+            cleanup();
+
+            if (bestPosition) {
+                resolve(bestPosition);
+                return;
+            }
+
+            reject(
+                lastError ||
+                new Error("Unable to obtain a GPS position.")
+            );
+        };
+
+        watchId = navigator.geolocation.watchPosition(
+            (position) => {
+                const accuracy = Number(
+                    position.coords.accuracy || Infinity
+                );
+
+                if (
+                    !bestPosition ||
+                    accuracy < Number(
+                        bestPosition.coords.accuracy || Infinity
+                    )
+                ) {
+                    bestPosition = position;
+                }
+
+                setLocationStatus(
+                    `Improving GPS accuracy... ±${Math.round(accuracy)}m`
+                );
+
+                if (accuracy <= 25) {
+                    finish();
+                }
+            },
+            (error) => {
+                lastError = error;
+
+                if (
+                    error.code === error.PERMISSION_DENIED &&
+                    !bestPosition
+                ) {
+                    finish();
+                }
+            },
+            {
+                enableHighAccuracy: true,
+                timeout: 12000,
+                maximumAge: 0
+            }
         );
 
+        // The first desktop reading is often network based. Give the
+        // browser a short window to refine it, then use the best sample.
+        timer = setTimeout(
+            finish,
+            8000
+        );
+    });
+};
+
+
+const verifyLocation = async () => {
+
+    if (!navigator.geolocation) {
+        setIsInZone(false);
+        setUserCoords(null);
+        setLocationStatus("GPS is not supported on this device ❌");
         return;
     }
 
+    setLocationStatus("Finding best GPS position...");
 
-    setLocationStatus(
-        "Checking location..."
-    );
+    let position;
 
+    try {
+        position = await getBestCurrentPosition();
+    } catch (error) {
+        console.error("❌ GPS Error:", error.message || error);
+        setIsInZone(false);
+        setUserCoords(null);
 
-    // --------------------------------------------------
-    // GET REAL DEVICE LOCATION
-    // --------------------------------------------------
+        const permissionDenied =
+            error?.code === 1;
 
-    navigator.geolocation.getCurrentPosition(
-
-        async (position) => {
-
-            const {
-                latitude,
-                longitude,
-                accuracy
-            } = position.coords;
-
-
-            console.log(
-                `📍 Current latitude: ${latitude}`
-            );
-
-            console.log(
-                `📍 Current longitude: ${longitude}`
-            );
-
-            console.log(
-                `📡 GPS accuracy: ${accuracy.toFixed(1)}m`
-            );
-
-
-            // Save REAL GPS coordinates
-            setUserCoords({
-
-                lat: latitude,
-
-                lng: longitude,
-
-                accuracy: accuracy
-
-            });
-
-
-            try {
-
-                // ------------------------------------------
-                // ASK BACKEND TO VERIFY LOCATION
-                // ------------------------------------------
-
-                const response =
-                    await axios.post(
-
-                        "/api/attendance/check-location",
-
-                        {
-                            latitude:
-                                latitude,
-
-                            longitude:
-                                longitude
-                        },
-
-                        props.config
-
-                    );
-
-
-                const result =
-                    response.data;
-
-
-                // ------------------------------------------
-                // INSIDE AUTHORISED ZONE
-                // ------------------------------------------
-
-                if (
-    result.success &&
-    result.inZone
-) {
-
-    // Employee is safely inside again,
-    // so reset the outside-zone counter.
-    outsideGeofenceChecksRef.current = 0;
-
-    setIsInZone(true);
-
-    setLocationStatus(
-
-        `${result.locationName} ✅ ` +
-        `(${result.distance}m)`
-
-    );
-
-}
-
-                // ------------------------------------------
-                // OUTSIDE AUTHORISED ZONE
-                // ------------------------------------------
-
-   else {
-
-    setIsInZone(false);
-
-    setLocationStatus(
-
-        `Outside Allowed Zone ❌ ` +
-        `(${result.distance}m from nearest location)`
-
-    );
-
-
-    // --------------------------------------------------
-    // COUNT CONSECUTIVE OUTSIDE CHECKS
-    // --------------------------------------------------
-
-    if (clockedIn) {
-
-        outsideGeofenceChecksRef.current += 1;
-
-
-        console.log(
-            `⚠️ Outside geofence check ` +
-            `${outsideGeofenceChecksRef.current}/3`
+        setLocationStatus(
+            permissionDenied
+                ? "Location permission is blocked. Allow location access and refresh GPS ❌"
+                : "Unable to obtain a reliable GPS position ❌"
         );
-
-
-        // ----------------------------------------------
-        // AUTO CLOCK-OUT AFTER 3 FAILED CHECKS
-        // ----------------------------------------------
-
-        if (
-            outsideGeofenceChecksRef.current >= 3
-        ) {
-
-            console.log(
-                "⚠️ Employee has remained outside " +
-                "the authorised geofence."
-            );
-
-
-            await autoClockOutAfterGeofenceExit(
-                latitude,
-                longitude,
-                accuracy
-            );
-
-        }
-
-    } else {
-
-        outsideGeofenceChecksRef.current = 0;
-
+        return;
     }
 
-}
+    const {
+        latitude,
+        longitude,
+        accuracy
+    } = position.coords;
 
+    console.log(`📍 Current latitude: ${latitude}`);
+    console.log(`📍 Current longitude: ${longitude}`);
+    console.log(`📡 Best GPS accuracy: ${accuracy.toFixed(1)}m`);
 
-            } catch (error) {
+    setUserCoords({
+        lat: latitude,
+        lng: longitude,
+        accuracy: accuracy
+    });
 
-                console.error(
-                    "❌ Geofence verification error:",
-                    error.response?.data ||
-                    error.message
+    try {
+        const response = await axios.post(
+            "/api/attendance/check-location",
+            {
+                latitude: latitude,
+                longitude: longitude,
+                accuracy_meters: Number(accuracy || 0)
+            },
+            props.config
+        );
+
+        const result = response.data;
+
+        if (result.gpsReliable === false) {
+            setIsInZone(false);
+            outsideGeofenceChecksRef.current = 0;
+            setLocationStatus(
+                `GPS signal too weak ❌ (±${Math.round(result.gpsAccuracy || accuracy)}m accuracy). ` +
+                `Enable device location/Wi-Fi or use a GPS-enabled phone, then refresh.`
+            );
+            return;
+        }
+
+        if (result.success && result.inZone) {
+            outsideGeofenceChecksRef.current = 0;
+            setIsInZone(true);
+            setLocationStatus(
+                `${result.locationName} ✅ ` +
+                `(${result.distance}m away, GPS ±${Math.round(accuracy)}m)`
+            );
+            return;
+        }
+
+        setIsInZone(false);
+        setLocationStatus(
+            `Outside Allowed Zone ❌ ` +
+            `(${result.distance}m from nearest location, GPS ±${Math.round(accuracy)}m)`
+        );
+
+        if (clockedIn) {
+            outsideGeofenceChecksRef.current += 1;
+
+            console.log(
+                `⚠️ Outside geofence check ${outsideGeofenceChecksRef.current}/3`
+            );
+
+            if (outsideGeofenceChecksRef.current >= 3) {
+                await autoClockOutAfterGeofenceExit(
+                    latitude,
+                    longitude,
+                    accuracy
+                );
+            }
+        } else {
+            outsideGeofenceChecksRef.current = 0;
+        }
+
+    } catch (error) {
+        console.error(
+            "❌ Geofence verification error:",
+            error.response?.data || error.message
+        );
+
+        const networkFailure = !error.response;
+
+        if (networkFailure) {
+            const cachedResult = evaluateCachedGeofence(
+                latitude,
+                longitude,
+                accuracy
+            );
+
+            if (cachedResult) {
+                setIsInZone(cachedResult.inZone);
+                setLocationStatus(
+                    cachedResult.inZone
+                        ? `Offline location cached locally ✅ (${cachedResult.distance}m) - server verification pending`
+                        : `Offline - Outside Allowed Zone ❌ (${cachedResult.distance}m from nearest cached location)`
                 );
 
-                const networkFailure =
-                    !error.response;
+                if (cachedResult.inZone) {
+                    outsideGeofenceChecksRef.current = 0;
+                } else if (clockedIn) {
+                    outsideGeofenceChecksRef.current += 1;
 
-                if (networkFailure) {
-
-                    const cachedResult =
-                        evaluateCachedGeofence(
-                            latitude,
-                            longitude
-                        );
-
-                    if (cachedResult) {
-
-                        setIsInZone(
-                            cachedResult.inZone
-                        );
-
-                        setLocationStatus(
-                            cachedResult.inZone
-                                ? `Offline location cached locally ✅ (${cachedResult.distance}m) - server verification pending`
-                                : `Offline - Outside Allowed Zone ❌ (${cachedResult.distance}m from nearest cached location)`
-                        );
-
-                        if (cachedResult.inZone) {
-                            outsideGeofenceChecksRef.current = 0;
-                        } else if (clockedIn) {
-                            outsideGeofenceChecksRef.current += 1;
-
-                            console.log(
-                                `📴 Offline outside geofence check ${outsideGeofenceChecksRef.current}/3`
-                            );
-
-                            if (
-                                outsideGeofenceChecksRef.current >= 3
-                            ) {
-                                await autoClockOutAfterGeofenceExit(
-                                    latitude,
-                                    longitude,
-                                    accuracy
-                                );
-                            }
-                        } else {
-                            outsideGeofenceChecksRef.current = 0;
-                        }
-
-                        return;
-                    }
-
-                    setIsInZone(false);
-
-                    setLocationStatus(
-                        "Offline: no cached authorised geofence is available. Reconnect once before using offline attendance ❌"
+                    console.log(
+                        `📴 Offline outside geofence check ${outsideGeofenceChecksRef.current}/3`
                     );
 
-                    return;
+                    if (outsideGeofenceChecksRef.current >= 3) {
+                        await autoClockOutAfterGeofenceExit(
+                            latitude,
+                            longitude,
+                            accuracy
+                        );
+                    }
+                } else {
+                    outsideGeofenceChecksRef.current = 0;
                 }
-
-                setIsInZone(false);
-
-                setLocationStatus(
-                    error.response?.data?.message ||
-                    "Unable to verify work location ❌"
-                );
-
+                return;
             }
 
-        },
-
-
-        // --------------------------------------------------
-        // GPS ERROR
-        // --------------------------------------------------
-
-        (error) => {
-
-            console.error(
-                "❌ GPS Error:",
-                error.message
-            );
-
-
             setIsInZone(false);
-
-            setUserCoords(null);
-
-
             setLocationStatus(
-                "Unable to verify location ❌"
+                "Offline: no cached authorised geofence is available. Reconnect once before using offline attendance ❌"
             );
+            return;
+        }
 
-        },
-
-
-        // --------------------------------------------------
-        // HIGH ACCURACY GPS
-        // --------------------------------------------------
-
-      {
-    enableHighAccuracy: true,
-
-    timeout: 30000,
-
-    maximumAge: 0
-}
-
-    );
-
+        setIsInZone(false);
+        setLocationStatus(
+            error.response?.data?.message ||
+            "Unable to verify work location ❌"
+        );
+    }
 };
 
     const selectedTicketRef = useRef("default");
@@ -1629,7 +1589,8 @@ const loadEmployeeLeaveBalances = async () => {
         const cachedGeofence =
             evaluateCachedGeofence(
                 latitude,
-                longitude
+                longitude,
+                accuracy
             );
 
         if (
@@ -1731,6 +1692,7 @@ const loadEmployeeLeaveBalances = async () => {
                     employee_id: employeeId,
                     latitude: latitude,
                     longitude: longitude,
+                    accuracy_meters: Number(accuracy || 0),
                     location_status: locationStatus,
                     sync_status: "Online"
                 },
@@ -1765,6 +1727,7 @@ const loadEmployeeLeaveBalances = async () => {
                     employee_id: employeeId,
                     latitude: latitude,
                     longitude: longitude,
+                    accuracy_meters: Number(accuracy || 0),
                     location_status: locationStatus,
                     sync_status: "Online"
                 },

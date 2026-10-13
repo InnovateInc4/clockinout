@@ -4053,6 +4053,49 @@ const AUTHORIZED_WORK_LOCATIONS = [
 
     radiusMeters:
       GEOFENCE_RADIUS_METERS
+  },
+
+
+  // ====================================================
+  // SPU CENTRAL CAMPUS - ZONE 5
+  // Connector between Moroka Hall and the northern part of
+  // Central Campus. This closes a gap without enlarging 50 m.
+  // ====================================================
+  {
+    id: 'spu-central-zone-5',
+
+    name:
+      'Sol Plaatje University Central Campus',
+
+    lat:
+      -28.748012,
+
+    lng:
+      24.764565,
+
+    radiusMeters:
+      GEOFENCE_RADIUS_METERS
+  },
+
+
+  // ====================================================
+  // SPU CENTRAL CAMPUS - ZONE 6
+  // Northern / central campus coverage point.
+  // ====================================================
+  {
+    id: 'spu-central-zone-6',
+
+    name:
+      'Sol Plaatje University Central Campus',
+
+    lat:
+      -28.747590,
+
+    lng:
+      24.764840,
+
+    radiusMeters:
+      GEOFENCE_RADIUS_METERS
   }
 
 ];
@@ -4190,10 +4233,37 @@ const calculateDistanceMeters = (
 // CHECK USER AGAINST ALL AUTHORISED LOCATIONS
 // ======================================================
 
+// Browser geolocation on laptops can report a small uncertainty
+// radius even while an employee is standing at the workplace. Use
+// only a bounded part of that uncertainty and reject very coarse GPS.
+const MAX_GPS_ACCURACY_ALLOWANCE_METERS = 50;
+const MAX_ACCEPTABLE_GPS_ACCURACY_METERS = 150;
+
 const evaluateGeofence = (
   latitude,
-  longitude
+  longitude,
+  accuracyMeters = 0
 ) => {
+
+  const rawGpsAccuracy =
+    Number(accuracyMeters);
+
+  const gpsAccuracy =
+    Number.isFinite(rawGpsAccuracy) &&
+    rawGpsAccuracy > 0
+      ? rawGpsAccuracy
+      : 0;
+
+  const gpsReliable =
+    gpsAccuracy === 0 ||
+    gpsAccuracy <=
+      MAX_ACCEPTABLE_GPS_ACCURACY_METERS;
+
+  const gpsAccuracyAllowance =
+    Math.min(
+      gpsAccuracy,
+      MAX_GPS_ACCURACY_ALLOWANCE_METERS
+    );
 
   if (
     AUTHORIZED_WORK_LOCATIONS.length === 0
@@ -4254,8 +4324,10 @@ const evaluateGeofence = (
 
     inZone:
 
+      gpsReliable &&
       nearestLocation.distance <=
-      nearestLocation.radiusMeters,
+        nearestLocation.radiusMeters +
+        gpsAccuracyAllowance,
 
     locationName:
       nearestLocation.name,
@@ -4267,7 +4339,16 @@ const evaluateGeofence = (
       nearestLocation.distance,
 
     allowedRadius:
-      nearestLocation.radiusMeters
+      nearestLocation.radiusMeters,
+
+    gpsAccuracy:
+      gpsAccuracy,
+
+    accuracyAllowance:
+      gpsAccuracyAllowance,
+
+    gpsReliable:
+      gpsReliable
 
   };
 };
@@ -4298,7 +4379,8 @@ app.post(
 
     const {
       latitude,
-      longitude
+      longitude,
+      accuracy_meters
     } = req.body;
 
 
@@ -4376,7 +4458,8 @@ app.post(
     const geofence =
       evaluateGeofence(
         employeeLatitude,
-        employeeLongitude
+        employeeLongitude,
+        accuracy_meters
       );
 
 
@@ -4410,7 +4493,20 @@ app.post(
         ),
 
       allowedRadius:
-        geofence.allowedRadius
+        geofence.allowedRadius,
+
+      gpsAccuracy:
+        Number(
+          geofence.gpsAccuracy.toFixed(1)
+        ),
+
+      accuracyAllowance:
+        Number(
+          geofence.accuracyAllowance.toFixed(1)
+        ),
+
+      gpsReliable:
+        geofence.gpsReliable
 
     });
 
@@ -4431,7 +4527,8 @@ app.put(
 
     const {
       latitude,
-      longitude
+      longitude,
+      accuracy_meters
     } = req.body;
 
 
@@ -4484,8 +4581,22 @@ app.put(
     const geofence =
       evaluateGeofence(
         employeeLatitude,
-        employeeLongitude
+        employeeLongitude,
+        accuracy_meters
       );
+
+
+    // Never auto clock-out from a coarse / unreliable GPS fix.
+    if (!geofence.gpsReliable) {
+
+      return res.status(400).json({
+        success: 0,
+        message:
+          `GPS accuracy is too low (±${geofence.gpsAccuracy.toFixed(0)}m). ` +
+          `Automatic clock-out was not performed.`
+      });
+
+    }
 
 
     // This endpoint must NEVER auto clock-out
@@ -4724,6 +4835,7 @@ app.post(
   const {
     latitude,
     longitude,
+    accuracy_meters,
     sync_status
   } = req.body;
 
@@ -4804,7 +4916,8 @@ app.post(
 const geofence =
   evaluateGeofence(
     employeeLatitude,
-    employeeLongitude
+    employeeLongitude,
+    accuracy_meters
   );
 
 
@@ -4817,6 +4930,22 @@ console.log(
   `${distanceFromWorkplace.toFixed(2)}m from ` +
   `${geofence.locationName}.`
 );
+
+
+// --------------------------------------------------
+// REJECT A GPS FIX THAT IS TOO COARSE FOR ATTENDANCE
+// --------------------------------------------------
+
+if (!geofence.gpsReliable) {
+
+  return res.status(400).json({
+    success: 0,
+    message:
+      `GPS accuracy is too low (±${geofence.gpsAccuracy.toFixed(0)}m). ` +
+      `Move near a window, enable device location/Wi-Fi, or use a GPS-enabled phone and refresh the location.`
+  });
+
+}
 
 
 // --------------------------------------------------
@@ -5007,6 +5136,7 @@ app.put(
   const {
     latitude,
     longitude,
+    accuracy_meters,
     sync_status
   } = req.body;
 
@@ -5086,7 +5216,8 @@ app.put(
 const geofence =
   evaluateGeofence(
     employeeLatitude,
-    employeeLongitude
+    employeeLongitude,
+    accuracy_meters
   );
 
 
@@ -5099,6 +5230,22 @@ console.log(
   `${distanceFromWorkplace.toFixed(2)}m from ` +
   `${geofence.locationName}.`
 );
+
+
+// --------------------------------------------------
+// REJECT A GPS FIX THAT IS TOO COARSE FOR ATTENDANCE
+// --------------------------------------------------
+
+if (!geofence.gpsReliable) {
+
+  return res.status(400).json({
+    success: 0,
+    message:
+      `GPS accuracy is too low (±${geofence.gpsAccuracy.toFixed(0)}m). ` +
+      `Move near a window, enable device location/Wi-Fi, or use a GPS-enabled phone and refresh the location.`
+  });
+
+}
 
 
 // --------------------------------------------------

@@ -124,9 +124,21 @@ export const getCachedAuthorizedGeofences = () => {
   return cached.locations;
 };
 
-export const evaluateCachedGeofence = (latitude, longitude) => {
+export const evaluateCachedGeofence = (
+  latitude,
+  longitude,
+  accuracyMeters = 0
+) => {
   const lat = Number(latitude);
   const lng = Number(longitude);
+  const rawAccuracy = Number(accuracyMeters);
+  const gpsAccuracy =
+    Number.isFinite(rawAccuracy) && rawAccuracy > 0
+      ? rawAccuracy
+      : 0;
+  const gpsReliable =
+    gpsAccuracy === 0 || gpsAccuracy <= 150;
+  const accuracyAllowance = Math.min(gpsAccuracy, 50);
 
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
     return null;
@@ -153,11 +165,17 @@ export const evaluateCachedGeofence = (latitude, longitude) => {
   const nearest = results[0];
 
   return {
-    inZone: nearest.distance <= nearest.radiusMeters,
+    inZone:
+      gpsReliable &&
+      nearest.distance <=
+        nearest.radiusMeters + accuracyAllowance,
     locationName: nearest.name,
     locationId: nearest.id,
     distance: Number(nearest.distance.toFixed(1)),
-    allowedRadius: nearest.radiusMeters
+    allowedRadius: nearest.radiusMeters,
+    gpsAccuracy: Number(gpsAccuracy.toFixed(1)),
+    accuracyAllowance: Number(accuracyAllowance.toFixed(1)),
+    gpsReliable
   };
 };
 
