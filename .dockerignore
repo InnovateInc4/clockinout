@@ -1,0 +1,12 @@
+node_modules
+build
+.git
+.github
+.env
+.env.*
+!.env.example
+npm-debug.log*
+*.zip
+*.pdf
+*.docx
+*.pptx

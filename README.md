@@ -2,6 +2,20 @@
 
 A municipal/provincial employee attendance and workforce-management system built with React, Node.js/Express and MySQL.
 
+## Fastest way to run the complete project
+
+For assessment, demonstrations and group members, use the portable Docker setup.
+
+1. Install Docker Desktop once.
+2. Download or clone this repository.
+3. Make sure Docker Desktop is running.
+4. Double-click **`START_DEMO.bat`**.
+5. The browser opens automatically at **http://localhost:3000**.
+
+This starts the React frontend, Express backend, MySQL database and synthetic demonstration data automatically. No manual SQL import, `.env` creation, MySQL Workbench setup or `npm install` is required on the host machine.
+
+See **`START_HERE.md`** for demo accounts, reset instructions and database-access details.
+
 ## Final Phase 4 feature set
 
 - JWT authentication with bcrypt password hashing and role-based access control.
@@ -35,7 +49,17 @@ A municipal/provincial employee attendance and workforce-management system built
 
 The original project brief listed Java. The lecturer subsequently confirmed that alternative implementation languages were permitted, so the final implementation uses React, Node.js/Express and MySQL.
 
-## Local setup
+## Demo database and privacy
+
+`database/demo_init.sql` creates the complete portable demonstration schema and uses synthetic demo users/data only.
+
+The live development database is intentionally not committed. The public repository must not contain real employee personal information, biometric/profile images, private contact details or real password hashes.
+
+The seeded worker accounts therefore do not contain a real face reference. To demonstrate face verification with a real person, register a new employee inside the local disposable demo database.
+
+## Original development setup
+
+The original non-Docker development workflow is still available:
 
 1. Install Node.js and MySQL.
 2. Clone this repository.
@@ -63,11 +87,10 @@ npm run verify:phase4
 
 ## Database support files
 
+- `database/demo_init.sql` creates a clean synthetic portable-demo database.
 - `database/phase4_supporting_tables.sql` documents the Phase 4 support tables.
 - `database/phase4_completion_upgrade.sql` adds the final offline-sync, leave-history and time-sync audit tables.
 - `database/phase4_verification.sql` contains read-only final verification queries.
-
-A database dump containing real employee information should not be committed to this public repository. Keep assessment backups separately and securely.
 
 ## Offline attendance integrity model
 
