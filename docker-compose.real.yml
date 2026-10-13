@@ -1,0 +1,59 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mcms-real-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: mcms_root_real_2026
+      MYSQL_DATABASE: municipal_db
+      MYSQL_USER: mcms
+      MYSQL_PASSWORD: mcms_real_2026
+    ports:
+      - "3307:3306"
+    volumes:
+      - mcms_real_mysql_data:/var/lib/mysql
+      - ./database/real_municipal_db.sql:/docker-entrypoint-initdb.d/01-real-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -pmcms_root_real_2026 --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: mcms-real-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      PORT: 5000
+      JWT_SECRET: mcms_real_portable_assessment_secret_2026_change_for_production
+      DB_HOST: mysql
+      DB_USER: mcms
+      DB_PASSWORD: mcms_real_2026
+      DB_NAME: municipal_db
+      NTP_SERVER: time.google.com
+      NTP_TIMEOUT_MS: 2000
+      NTP_REFRESH_MINUTES: 15
+      OFFLINE_SYNC_MAX_AGE_HOURS: 168
+      OFFLINE_MAX_GPS_ACCURACY_METERS: 100
+    ports:
+      - "5000:5000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: mcms-real-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+
+volumes:
+  mcms_real_mysql_data:
